@@ -33,24 +33,32 @@ public:
     }
 
 private:
-    static lex::token eof() { return lex::token{}; };
-    static lex::token identifier(const char* str) {
-        return lex::token{lex::token_type::identifier, str, strlen(str)};
-    };
-    static lex::token literal(const char* str) {
-        return lex::token{lex::token_type::literal, str, strlen(str)};
-    };
-    static lex::token op(const char* str) {
-        return lex::token{lex::token_type::op, str, strlen(str)};
+    struct expected_token {
+        expected_token(lex::token_type t, const char* str) : type(t), str(str) {
+        }
+        lex::token_type type;
+        std::string     str;
     };
 
-    static void test_tokenizer(const std::string& text, std::initializer_list<lex::token> expected_tokens) {
-        lex::tokenizer t{text.c_str(), text.length()};
+    static expected_token eof() { return expected_token{lex::token_type::eof, ""}; };
+    static expected_token identifier(const char* str) {
+        return expected_token{lex::token_type::identifier, str};
+    };
+    static expected_token literal(const char* str) {
+        return expected_token{lex::token_type::literal, str};
+    };
+    static expected_token op(const char* str) {
+        return expected_token{lex::token_type::op, str};
+    };
+
+    static void test_tokenizer(const std::string& text, std::initializer_list<expected_token> expected_tokens) {
+        source::file src{text, text};
+        lex::tokenizer t{src};
         for (const auto& expected_token : expected_tokens) {
             auto current_token = t.consume();
             std::cout << current_token << " " << std::flush;
-            if (current_token != expected_token) {
-                std::cerr << "Tokenizer error. Expeceted " << expected_token << " got " << current_token << std::endl;
+            if (current_token.type() != expected_token.type || current_token.str() != expected_token.str ) {
+                std::cerr << "Tokenizer error. Expeceted " << expected_token.type << " got " << current_token << std::endl;
                 abort();
             }
         }

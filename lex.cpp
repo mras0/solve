@@ -56,12 +56,8 @@ std::ostream& operator<<(std::ostream& os, token_type t) {
     return os;
 }
 
-token::token() : type_(token_type::eof), text_(""), length_() {
-}
-
-token::token(token_type type, const char* text, size_t length) : type_(type), text_(text), length_(length) {
-    assert(type != token_type::eof);
-    assert(try_parse(type, text, length) == length);
+token::token(token_type type, const source::position& position, size_t length) : type_(type), position_(position), length_(length) {
+    assert((type == token_type::eof && length_ == 0) || try_parse(type, position.data(), length_) == length_);
 }
 
 bool operator==(const token& a, const token& b) {
@@ -82,32 +78,32 @@ void tokenizer::next_token() {
     // loop until we reach eof or get a now whitespace character
     for (;;) {
         // handle end of text
-        if (pos_ >= length_) {
-            assert(pos_ == length_);
-            current_ = token{}; // EOF
+        if (position_.index() >= source_.length()) {
+            assert(position_.index() == source_.length());
+            current_ = token{token_type::eof, position_, 0};
             return;
         }
 
-        // we can now safely extract text_[pos_]
-        const char* const text_pos = text_ + pos_;
-        const size_t      remaining = length_ - pos_;
+        // we can now safely extract text_[position_.index()]
+        const char* const text = source_.data() + position_.index();
+        const size_t      remaining = source_.length() - position_.index();
 
         // skip whitespace
-        if (isspace(*text_pos)) {
-            pos_++;
+        if (isspace(*text)) {
+            position_ = position_.advanced_ws(*text);
             continue;
         }
 
         for (const auto& t : { token_type::identifier, token_type::literal, token_type::op}) {
-            if (const auto l = try_parse(t, text_pos, remaining)) {
+            if (const auto l = try_parse(t, text, remaining)) {
                 assert(l <= remaining);
-                pos_ += l;
-                current_ = token{t, text_pos, l};
+                current_ = token{t, position_, l};
+                position_ = position_.advanced_n(l);
                 return;
             }
         }
 
-        throw std::runtime_error("Parse error at: " + std::string(text_pos, text_pos+remaining));
+        throw std::runtime_error("Parse error at: " + std::string(text, text+remaining));
     }
 }
 

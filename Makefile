@@ -1,5 +1,5 @@
 EXE=solve
-SRCFILES=solve.cpp lex.cpp
+SRCFILES=source.cpp lex.cpp solve.cpp 
 
 .PHONY: all test
 all: $(EXE) tags
