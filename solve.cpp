@@ -7,13 +7,13 @@
 class token_test {
 public:
     static void run() {
-        test_tokenizer("",{eof()});
-        test_tokenizer("\t\n\r   ",{eof()});
-        test_tokenizer(" id  ",{identifier("id"), eof()});
-        test_tokenizer("3.14",{literal("3.14"), eof()});
-        test_tokenizer("=\n",{op("="), eof()});
-        test_tokenizer("\thello 42",{identifier("hello"), literal("42"), eof()});
-        test_tokenizer("\tx + 1e3 = 20",{identifier("x"), op("+"), literal("1e3"), op("="), literal("20"), eof()});
+        test_tokenizer("", { eof(1,1) });
+        test_tokenizer("\t\n\r   ", { eof() });
+        test_tokenizer("\nid  ", { identifier("id", 2, 1), eof() });
+        test_tokenizer("3.14", { literal("3.14"), eof() });
+        test_tokenizer("=\n", { op("="), eof() });
+        test_tokenizer("\thello 42", { identifier("hello", 1, 8), literal("42"), eof() });
+        test_tokenizer("\nx + 1e3 = 20",{ identifier("x"), op("+"), literal("1e3", 2, 5), op("="), literal("20"), eof() });
 
         const char* const program = R"(
             vals       = 2000
@@ -34,21 +34,34 @@ public:
 
 private:
     struct expected_token {
-        expected_token(lex::token_type t, const char* str) : type(t), str(str) {
+        expected_token(lex::token_type t, const char* str, size_t line, size_t col) : type(t), str(str), line(line), col(col) {
         }
         lex::token_type type;
         std::string     str;
+        size_t          line;
+        size_t          col;
+
+        void verify(const lex::token& actual) const {
+            if (actual.type() != type || actual.str() != str) {
+                std::cerr << "Tokenizer error. Expeceted " << type << " got " << actual << " at " << actual.position() << std::endl;
+                abort();
+            }
+            if ((line && actual.position().line() != line) || (col && actual.position().col() != col)) {
+                std::cerr << "Tokenizer error. Expeceted line " << line << " col " << col << " got " << actual << " at " << actual.position() << std::endl;
+                abort();
+            }
+         }
     };
 
-    static expected_token eof() { return expected_token{lex::token_type::eof, ""}; };
-    static expected_token identifier(const char* str) {
-        return expected_token{lex::token_type::identifier, str};
+    static expected_token eof(size_t line=0, size_t col=0) { return expected_token{lex::token_type::eof, "", line, col}; };
+    static expected_token identifier(const char* str, size_t line=0, size_t col=0) {
+        return expected_token{lex::token_type::identifier, str, line, col};
     };
-    static expected_token literal(const char* str) {
-        return expected_token{lex::token_type::literal, str};
+    static expected_token literal(const char* str, size_t line=0, size_t col=0) {
+        return expected_token{lex::token_type::literal, str, line, col};
     };
-    static expected_token op(const char* str) {
-        return expected_token{lex::token_type::op, str};
+    static expected_token op(const char* str, size_t line=0, size_t col=0) {
+        return expected_token{lex::token_type::op, str, line, col};
     };
 
     static void test_tokenizer(const std::string& text, std::initializer_list<expected_token> expected_tokens) {
@@ -57,10 +70,7 @@ private:
         for (const auto& expected_token : expected_tokens) {
             auto current_token = t.consume();
             std::cout << current_token << " " << std::flush;
-            if (current_token.type() != expected_token.type || current_token.str() != expected_token.str ) {
-                std::cerr << "Tokenizer error. Expeceted " << expected_token.type << " got " << current_token << std::endl;
-                abort();
-            }
+            expected_token.verify(current_token);
         }
         assert(t.current().type() == lex::token_type::eof);
         std::cout << "OK!\n";
