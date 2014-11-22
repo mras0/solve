@@ -43,7 +43,11 @@ public:
         next_token();
     }
 
-    const token& current() const {
+    bool eof() const {
+        return current().type() == token_type::eof;
+    }
+
+    token current() const {
         return current_;
     }
 

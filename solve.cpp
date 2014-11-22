@@ -84,37 +84,25 @@ private:
 
 namespace ast {
 
-class node {
+class expression {
 public:
-    virtual ~node() {}
+    virtual ~expression() {}
 
     source::position position() const { return position_; }
 
     virtual std::string repr() const = 0;
 
 protected:
-    explicit node(const source::position& position) : position_(position) {
+    expression(const source::position& position) : position_(position) {
     }
 
 private:
     source::position position_;
 };
 
-class expression : public node {
-protected:
-    expression(const source::position& position) : node(position) {
-    }
-};
-
-class primary_expression : public expression {
-protected:
-    primary_expression(const source::position& position) : expression(position) {
-    }
-};
-
-class literal_node : public primary_expression {
+class literal_node : public expression {
 public:
-    literal_node(const source::position& position, double value) : primary_expression(position), value_(value) {
+    literal_node(const source::position& position, double value) : expression(position), value_(value) {
     }
 
     virtual std::string repr() const override { return "{literal " + std::to_string(value_) + "}"; }
@@ -177,25 +165,17 @@ public:
     explicit parser(const source::file& src) : src_(src), tokenizer_(src_) {
     }
 
-    void parse() {
-        for (;;) {
-            auto tok = tokenizer_.current();
-            if (tok.type() == lex::token_type::eof) {
-                break;
-            }
-            std::cout << tok.position() << " " << tok.type() << " ==> " << std::flush;
-            auto expr = parse_expression();
-            std::cout << expr->repr() << std::endl;
-        }
+    bool eof() {
+        return tokenizer_.eof();
+    }
+
+    std::unique_ptr<expression> parse_expression() {
+        return parse_expression_1(parse_primary_expression(), 0);
     }
 
 private:
     const source::file& src_;
     lex::tokenizer      tokenizer_;
-
-    std::unique_ptr<expression> parse_expression() {
-        return parse_expression_1(parse_primary_expression(), 0);
-    }
 
     // http://en.wikipedia.org/wiki/Operator-precedence_parser
     std::unique_ptr<expression> parse_expression_1(std::unique_ptr<expression> lhs, int min_precedence) {
@@ -256,11 +236,11 @@ private:
         return lhs;
     }
 
-    std::unique_ptr<primary_expression> parse_primary_expression() {
+    std::unique_ptr<expression> parse_primary_expression() {
         auto tok = tokenizer_.current();
         if (tok.type() == lex::token_type::literal) {
             tokenizer_.consume();
-            return std::unique_ptr<primary_expression>(new literal_node{tok.position(), std::stod(tok.str())});
+            return std::unique_ptr<expression>(new literal_node{tok.position(), std::stod(tok.str())});
         }
         throw parse_error("Expeceted literal in parse_primary_expression");
     }
@@ -275,10 +255,18 @@ private:
 
 } // namespace ast
 
+void foo(const ast::expression& expr)
+{
+    std::cout << expr.position() << " ==> " << expr.repr() << std::endl;
+}
+
 int main()
 {
     token_test::run();
 
     source::file src{"<test>", "1+2*3"};
-    ast::parser{src}.parse();
+    ast::parser p{src};
+    while (!p.eof()) {
+        foo(*p.parse_expression());
+    }
 }
