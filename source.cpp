@@ -5,6 +5,11 @@
 
 namespace source {
 
+bool operator<(const position& a, const position& b) {
+    assert(&a.source() == &b.source());
+    return a.index() < b.index();
+}
+
 position::position(const file& source) : source_(&source), line_(1), col_(1), index_(0) {
 }
 

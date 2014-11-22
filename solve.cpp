@@ -87,27 +87,22 @@ namespace ast {
 class expression {
 public:
     virtual ~expression() {}
-
-    source::position position() const { return position_; }
-
     virtual std::string repr() const = 0;
-
-protected:
-    expression(const source::position& position) : position_(position) {
-    }
-
-private:
-    source::position position_;
+    virtual const lex::token& start_token() const = 0;
+    virtual const lex::token& end_token() const = 0;
 };
 
 class literal_node : public expression {
 public:
-    literal_node(const source::position& position, double value) : expression(position), value_(value) {
+    literal_node(const lex::token& token) : token_(token) {
+        assert(token_.type() == lex::token_type::literal);
     }
 
-    virtual std::string repr() const override { return "{literal " + std::to_string(value_) + "}"; }
+    virtual std::string repr() const override { return "{literal " + token_.str() + "}"; }
+    virtual const lex::token& start_token() const override { return token_; }
+    virtual const lex::token& end_token() const override { return token_; }
 private:
-    double value_;
+    lex::token token_;
 };
 
 class binary_expression : public expression {
@@ -115,13 +110,16 @@ public:
     const expression& lhs() const { return *lhs_; }
     const expression& rhs() const { return *rhs_; }
 protected:
-    binary_expression(const source::position& position, std::unique_ptr<expression> lhs, std::unique_ptr<expression> rhs) : expression(position), lhs_(std::move(lhs)), rhs_(std::move(rhs)) {
+    binary_expression(std::unique_ptr<expression> lhs, std::unique_ptr<expression> rhs) : lhs_(std::move(lhs)), rhs_(std::move(rhs)) {
         assert(lhs_);
         assert(rhs_);
+        assert(lhs_->start_token().position() < rhs_->end_token().position());
     }
 private:
     std::unique_ptr<expression> lhs_;
     std::unique_ptr<expression> rhs_;
+    virtual const lex::token& start_token() const override { return lhs_->start_token(); }
+    virtual const lex::token& end_token() const override { return rhs_->end_token(); }
 };
 
 struct operator_info {
@@ -146,7 +144,7 @@ struct operator_info {
 
 class binary_operation : public binary_expression {
 public:
-    binary_operation(const source::position& position, std::unique_ptr<expression> lhs, std::unique_ptr<expression> rhs, const operator_info& opinfo) : binary_expression(position, std::move(lhs), std::move(rhs)), opinfo_(opinfo) {
+    binary_operation(std::unique_ptr<expression> lhs, std::unique_ptr<expression> rhs, const operator_info& opinfo) : binary_expression(std::move(lhs), std::move(rhs)) , opinfo_(opinfo) {
         assert(opinfo_.is_binary);
     }
     const operator_info& opinfo() const { return opinfo_; }
@@ -231,7 +229,7 @@ private:
             }
 
             // lhs := the result of applying op with operands lhs and rhs
-            lhs = std::unique_ptr<expression>{new binary_operation{lhs->position(), std::move(lhs), std::move(rhs), lhs_opinfo}};
+            lhs = std::unique_ptr<expression>{new binary_operation{std::move(lhs), std::move(rhs), lhs_opinfo}};
         }
         return lhs;
     }
@@ -240,7 +238,7 @@ private:
         auto tok = tokenizer_.current();
         if (tok.type() == lex::token_type::literal) {
             tokenizer_.consume();
-            return std::unique_ptr<expression>(new literal_node{tok.position(), std::stod(tok.str())});
+            return std::unique_ptr<expression>(new literal_node{tok});
         }
         throw parse_error("Expeceted literal in parse_primary_expression");
     }
@@ -257,7 +255,9 @@ private:
 
 void foo(const ast::expression& expr)
 {
-    std::cout << expr.position() << " ==> " << expr.repr() << std::endl;
+    std::cout << "Start = " << expr.start_token().position();
+    std::cout << " End = " << expr.end_token().position();
+    std::cout << " ==> " << expr.repr() << std::endl;
 }
 
 int main()

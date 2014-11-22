@@ -44,6 +44,7 @@ private:
     size_t      index_;
 };
 
+bool operator<(const position& a, const position& b);
 std::ostream& operator<<(std::ostream& os, const position& pos);
 
 } // namespace source
