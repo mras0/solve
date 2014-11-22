@@ -9,6 +9,10 @@ literal_expression::literal_expression(const lex::token& token) : token_(token) 
     assert(token_.type() == lex::token_type::literal);
 }
 
+atom_expression::atom_expression(const lex::token& token) : token_(token) {
+    assert(token_.type() == lex::token_type::identifier);
+}
+
 binary_expression::binary_expression(std::unique_ptr<expression> lhs, std::unique_ptr<expression> rhs) : lhs_(std::move(lhs)), rhs_(std::move(rhs)) {
     assert(lhs_);
     assert(rhs_);
@@ -90,8 +94,11 @@ std::unique_ptr<expression> parser::parse_primary_expression() {
     if (tok.type() == lex::token_type::literal) {
         tokenizer_.consume();
         return std::unique_ptr<expression>(new literal_expression{tok});
+    } else if (tok.type() == lex::token_type::identifier) {
+        tokenizer_.consume();
+        return std::unique_ptr<expression>(new atom_expression{tok});
     }
-    throw parse_error("Expeceted literal in parse_primary_expression");
+    throw parse_error("Expeceted literal or atom in parse_primary_expression");
 }
 
 std::runtime_error parser::parse_error(const std::string& message) {

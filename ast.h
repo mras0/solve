@@ -26,6 +26,17 @@ private:
     lex::token token_;
 };
 
+class atom_expression : public expression {
+public:
+    atom_expression(const lex::token& token);
+
+    virtual std::string repr() const override { return "{atom " + token_.str() + "}"; }
+    virtual const lex::token& start_token() const override { return token_; }
+    virtual const lex::token& end_token() const override { return token_; }
+private:
+    lex::token token_;
+};
+
 class binary_expression : public expression {
 public:
     const expression& lhs() const { return *lhs_; }
