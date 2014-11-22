@@ -29,6 +29,17 @@ std::string binary_operation::repr() const {
     return oss.str();
 }
 
+std::unique_ptr<expression> parser::parse_expression() {
+    while (tokenizer_.current().type() == lex::token_type::separator) {
+        tokenizer_.consume();
+    }
+    auto e = parse_expression_1(parse_primary_expression(), 0);
+    assert(e);
+    while (tokenizer_.current().type() == lex::token_type::separator) {
+        tokenizer_.consume();
+    }
+    return e;
+}
 
 // http://en.wikipedia.org/wiki/Operator-precedence_parser
 std::unique_ptr<expression> parser::parse_expression_1(std::unique_ptr<expression> lhs, int min_precedence) {

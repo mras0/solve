@@ -89,9 +89,7 @@ public:
         return tokenizer_.eof();
     }
 
-    std::unique_ptr<expression> parse_expression() {
-        return parse_expression_1(parse_primary_expression(), 0);
-    }
+    std::unique_ptr<expression> parse_expression();
 
 private:
     const source::file& src_;
