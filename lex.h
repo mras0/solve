@@ -11,7 +11,7 @@ enum class token_type {
     identifier,
     literal,
     op,
-
+    separator,
     eof
 };
 std::ostream& operator<<(std::ostream& os, token_type t);

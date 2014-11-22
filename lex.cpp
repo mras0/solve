@@ -50,6 +50,7 @@ std::ostream& operator<<(std::ostream& os, token_type t) {
     HANDLE_TOKEN_TYPE(identifier);
     HANDLE_TOKEN_TYPE(literal);
     HANDLE_TOKEN_TYPE(op);
+    HANDLE_TOKEN_TYPE(separator);
     HANDLE_TOKEN_TYPE(eof);
 #undef HANDLE_TOKEN_TYPE
     }
@@ -57,7 +58,9 @@ std::ostream& operator<<(std::ostream& os, token_type t) {
 }
 
 token::token(token_type type, const source::position& position, size_t length) : type_(type), position_(position), length_(length) {
-    assert((type == token_type::eof && length_ == 0) || try_parse(type, position.data(), length_) == length_);
+    assert((type == token_type::eof && length_ == 0)
+            || (type == token_type::separator && length_ == 1)
+            || try_parse(type, position.data(), length_) == length_);
 }
 
 bool operator==(const token& a, const token& b) {
@@ -87,6 +90,13 @@ void tokenizer::next_token() {
         // we can now safely extract text_[position_.index()]
         const char* const text = source_.data() + position_.index();
         const size_t      remaining = source_.length() - position_.index();
+
+        // handle newline specially
+        if (*text == '\n') {
+            current_ = token{token_type::separator, position_, 1};
+            position_ = position_.advanced_ws(*text);
+            return;
+        }
 
         // skip whitespace
         if (isspace(*text)) {

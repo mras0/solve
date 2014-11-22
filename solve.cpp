@@ -8,12 +8,12 @@ class token_test {
 public:
     static void run() {
         test_tokenizer("", { eof(1,1) });
-        test_tokenizer("\t\n\r   ", { eof() });
-        test_tokenizer("\nid  ", { identifier("id", 2, 1), eof() });
+        test_tokenizer("\t\n\r   ", { sep(), eof() });
+        test_tokenizer("\nid  ", { sep(), identifier("id", 2, 1), eof() });
         test_tokenizer("3.14", { literal("3.14"), eof() });
-        test_tokenizer("=\n", { op("="), eof() });
+        test_tokenizer("=\n", { op("="), sep(), eof() });
         test_tokenizer("\thello 42", { identifier("hello", 1, 8), literal("42"), eof() });
-        test_tokenizer("\nx + 1e3 = 20",{ identifier("x"), op("+"), literal("1e3", 2, 5), op("="), literal("20"), eof() });
+        test_tokenizer("\nx + 1e3 = 20",{ sep(), identifier("x"), op("+"), literal("1e3", 2, 5), op("="), literal("20"), eof() });
 
         const char* const program = R"(
             vals       = 2000
@@ -23,11 +23,12 @@ public:
             bsperday   = bspersec * 60 * 60 * 24
             )";
         test_tokenizer(program, {
-                identifier("vals"),     op("="), literal("2000"),
-                identifier("valsize"),  op("="), literal("8"),
-                identifier("freq"),     op("="), literal("1"),
-                identifier("bspersec"), op("="), identifier("vals"), op("*"), identifier("valsize"), op("*"), identifier("freq"),
-                identifier("bsperday"), op("="), identifier("bspersec"), op("*"), literal("60"), op("*"), literal("60"), op("*"), literal("24"),
+                sep(),
+                identifier("vals"),     op("="), literal("2000"), sep(),
+                identifier("valsize"),  op("="), literal("8"), sep(),
+                identifier("freq"),     op("="), literal("1"), sep(),
+                identifier("bspersec"), op("="), identifier("vals"), op("*"), identifier("valsize"), op("*"), identifier("freq"), sep(),
+                identifier("bsperday"), op("="), identifier("bspersec"), op("*"), literal("60"), op("*"), literal("60"), op("*"), literal("24"), sep(),
                 eof(),
                 });
     }
@@ -53,6 +54,7 @@ private:
          }
     };
 
+    static expected_token sep(size_t line=0, size_t col=0) { return expected_token{lex::token_type::separator, "\n", line, col}; };
     static expected_token eof(size_t line=0, size_t col=0) { return expected_token{lex::token_type::eof, "", line, col}; };
     static expected_token identifier(const char* str, size_t line=0, size_t col=0) {
         return expected_token{lex::token_type::identifier, str, line, col};
