@@ -3,8 +3,39 @@
 #include <sstream>
 #include <stdexcept>
 
-namespace ast {
+namespace {
+const ast::operator_info op_infos[] = {
+    { "*", 2, true, true },
+    { "/", 2, true, true },
+    { "+", 1, true, true },
+    { "-", 1, true, true },
+};
+const ast::operator_info* try_get_op_info(const lex::token& t) {
+    for (const auto& i : op_infos) {
+        if (t.str() == i.repr) return &i;
+    }
+    return nullptr;
+}
 
+const ast::operator_info& get_op_info(const lex::token& t) {
+    if (auto i = try_get_op_info(t)) {
+        return *i;
+    }
+    std::ostringstream oss;
+    oss << "Not an operator " << t;
+    throw std::logic_error(oss.str());
+}
+
+bool is_bin_op(const lex::token& t) {
+    if (auto i = try_get_op_info(t)) {
+        return i->is_binary;
+    }
+    return false;
+}
+
+} // unnamed namespace
+
+namespace ast {
 literal_expression::literal_expression(const lex::token& token) : token_(token) {
     assert(token_.type() == lex::token_type::literal);
 }
@@ -46,16 +77,10 @@ std::unique_ptr<expression> parser::parse_expression_1(std::unique_ptr<expressio
     for (;;) {
         // while lookahead is a binary operator whose precedence is >= min_precedence
         auto lookahead = tokenizer_.current();
-        if (lookahead.type() != lex::token_type::op) {
-            // Not an operator
+        if (!is_bin_op(lookahead)) {
             break;
         }
-        auto lhs_opinfo = operator_info::get(lookahead.str());
-
-        if (!lhs_opinfo.is_binary) {
-            // Not binary
-            break;
-        }
+        auto lhs_opinfo = get_op_info(lookahead);
 
         if (lhs_opinfo.precedence < min_precedence) {
             // Precedence is not >= min_precedence
@@ -69,11 +94,10 @@ std::unique_ptr<expression> parser::parse_expression_1(std::unique_ptr<expressio
             // while lookahead is a binary operator whose precedence is greater
             // than op's, or a right-associative operator whose precedence is equal to op's
             lookahead = tokenizer_.current();
-            if (lookahead.type() != lex::token_type::op) {
-                // Not an operator
-                break;
+            if (!is_bin_op(lookahead)) {
+                    break;
             }
-            auto rhs_opinfo = operator_info::get(lookahead.str());
+            auto rhs_opinfo = get_op_info(lookahead);
 
             if (!rhs_opinfo.is_binary) {
                 // Not binary

@@ -102,14 +102,13 @@ void ast_test()
         bin_op('-', lit(42), lit(60)),
     });
 #if 0
-    const char* const program = R"(
+    run_many("program", R"(
         vals       = 2000
         valsize    = 8
         freq       = 1
         bspersec   = vals * valsize * freq
         bsperday   = bspersec * 60 * 60 * 24
-        )";
-    run_many("program", program, {
+    )", {
     });
 #endif
 }

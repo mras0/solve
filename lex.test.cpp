@@ -41,7 +41,8 @@ expected_token literal(const char* str, size_t line=0, size_t col=0) {
 }
 
 expected_token op(const char* str, size_t line=0, size_t col=0) {
-    return expected_token{lex::token_type::op, str, line, col};
+    assert(str[1] == 0);
+    return expected_token{static_cast<lex::token_type>(str[0]), str, line, col};
 }
 
 void test_tokenizer(const std::string& text, std::initializer_list<expected_token> expected_tokens) {

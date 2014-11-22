@@ -55,19 +55,6 @@ struct operator_info {
     int precedence;
     bool is_binary;
     bool is_left_associative;
-
-    static const operator_info& get(const std::string& s) {
-        static const operator_info op_info[] = {
-            { "*", 2, true, true },
-            { "/", 2, true, true },
-            { "+", 1, true, true },
-            { "-", 1, true, true },
-        };
-        for (const auto& i : op_info) {
-            if (s == i.repr) return i;
-        }
-        throw std::logic_error("Unknown operator \"" + s + "\" in " + __func__);
-    }
 };
 
 class binary_operation : public binary_expression {

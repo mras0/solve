@@ -8,9 +8,14 @@
 namespace lex {
 
 enum class token_type {
-    identifier,
+    op_mul = '*',
+    op_add = '+',
+    op_sub = '-',
+    op_div = '/',
+    op_eq  = '=',
+
+    identifier = 256,
     literal,
-    op,
     separator,
     eof
 };

@@ -25,12 +25,8 @@ size_t try_parse(lex::token_type t, const char* text, size_t length) {
             assert(l <= length);
             return l;
         }
-    } else if (t == lex::token_type::op) {
-        for (const auto& op : "*+-/=") {
-            if (*text == op) {
-                return 1;
-            }
-        }
+    } else if (length ==1 && static_cast<unsigned char>(*text) == static_cast<unsigned>(t)) {
+        return 1;
     } else {
         std::ostringstream oss;
         oss << "Unhandled token type '" << t << "' str='" << std::string{text, text+length} << "' in " << __func__;
@@ -46,9 +42,13 @@ namespace lex {
 std::ostream& operator<<(std::ostream& os, token_type t) {
     switch (t) {
 #define HANDLE_TOKEN_TYPE(t) case token_type::t: os << #t; break
+    HANDLE_TOKEN_TYPE(op_mul);
+    HANDLE_TOKEN_TYPE(op_add);
+    HANDLE_TOKEN_TYPE(op_sub);
+    HANDLE_TOKEN_TYPE(op_div);
+    HANDLE_TOKEN_TYPE(op_eq);
     HANDLE_TOKEN_TYPE(identifier);
     HANDLE_TOKEN_TYPE(literal);
-    HANDLE_TOKEN_TYPE(op);
     HANDLE_TOKEN_TYPE(separator);
     HANDLE_TOKEN_TYPE(eof);
 #undef HANDLE_TOKEN_TYPE
@@ -102,8 +102,15 @@ void tokenizer::next_token() {
             position_ = position_.advanced_ws(*text);
             continue;
         }
+        for (const auto& op : "*+-/=") {
+            if (*text == op) {
+                current_ = token{static_cast<token_type>(*text), position_, 1};
+                position_ = position_.advanced_n(1);
+                return;
+            }
+        }
 
-        for (const auto& t : { token_type::op, token_type::identifier, token_type::literal }) {
+        for (const auto& t : { token_type::identifier, token_type::literal }) {
             if (const auto l = try_parse(t, text, remaining)) {
                 assert(l <= remaining);
                 current_ = token{t, position_, l};
