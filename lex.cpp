@@ -1,8 +1,7 @@
 #include "lex.h"
 
 #include <sstream>
-#include <memory>
-#include <stdlib.h>
+#include <stdexcept>
 #include <assert.h>
 #include <ctype.h>
 
@@ -104,7 +103,7 @@ void tokenizer::next_token() {
             continue;
         }
 
-        for (const auto& t : { token_type::identifier, token_type::literal, token_type::op}) {
+        for (const auto& t : { token_type::op, token_type::identifier, token_type::literal }) {
             if (const auto l = try_parse(t, text, remaining)) {
                 assert(l <= remaining);
                 current_ = token{t, position_, l};
