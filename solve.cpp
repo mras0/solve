@@ -15,20 +15,12 @@ public:
     virtual ~node() {};
 };
 
-class const_node : public node {
-public:
-    explicit const_node(double value) : value_(value) {
-    }
-
-private:
-    double value_;
-};
-
 } // namespace ast
 
 enum class token_type {
-    constant,
+    literal,
     identifier,
+    op,
 
     eof
 };
@@ -36,8 +28,9 @@ enum class token_type {
 std::ostream& operator<<(std::ostream& os,  token_type t) {
     switch (t) {
 #define HANDLE_TOKEN_TYPE(t) case token_type::t: os << #t; break
-    HANDLE_TOKEN_TYPE(constant);
+    HANDLE_TOKEN_TYPE(literal);
     HANDLE_TOKEN_TYPE(identifier);
+    HANDLE_TOKEN_TYPE(op);
     HANDLE_TOKEN_TYPE(eof);
 #undef HANDLE_TOKEN_TYPE
     }
@@ -76,7 +69,7 @@ std::ostream& operator<<(std::ostream& os, const token& t) {
     return os;
 }
 
-class constant_token : public token {
+class literal_token : public token {
 public:
     static token_ptr try_parse(const char* text, size_t length) {
         std::istringstream iss{std::string{text, text+length}};
@@ -86,7 +79,7 @@ public:
             const auto l = iss.eof() ? length : static_cast<size_t>(iss.tellg());
             assert(l != 0);
             assert(l <= length);
-            return token_ptr{new constant_token{text, l, value}};
+            return token_ptr{new literal_token{text, l, value}};
         }
         return nullptr;
     }
@@ -95,7 +88,7 @@ public:
 private:
     double value_;
 
-    constant_token(const char* text, size_t length, double value) : token(token_type::constant, text, length), value_(value) {
+    literal_token(const char* text, size_t length, double value) : token(token_type::literal, text, length), value_(value) {
     }
 };
 
@@ -113,6 +106,27 @@ private:
     }
 };
 
+class op_token : public token {
+public:
+    static token_ptr try_parse(const char* text, size_t length) {
+        if (length == 0) {
+            assert(false);
+            return nullptr;
+        }
+        const char c = *text;
+        for (const auto& op : "*+-/=") {
+            if (c == op) {
+                return token_ptr{new op_token{text, 1}};
+            }
+        }
+        return nullptr;
+    }
+private:
+    op_token(const char* text, size_t length) : token(token_type::op, text, length) {
+        assert(length == 1);
+    }
+};
+
 class eof_token : public token {
 public:
     explicit eof_token() : token(token_type::eof, "", 0) {
@@ -122,10 +136,12 @@ public:
 token_ptr make_token(token_type type, const std::string& str)
 {
     token_ptr p;
-    if (type == token_type::constant) {
-        p = constant_token::try_parse(str.c_str(), str.length());
+    if (type == token_type::literal) {
+        p = literal_token::try_parse(str.c_str(), str.length());
     } else if (type == token_type::identifier) {
         p = identifier_token::try_parse(str.c_str(), str.length());
+    } else if (type == token_type::op) {
+        p = op_token::try_parse(str.c_str(), str.length());
     } else {
         std::ostringstream oss;
         oss << "Unhandled token type '" << type << "' str='" << str << "'";
@@ -192,7 +208,8 @@ private:
 
             static const decltype(&identifier_token::try_parse) parsers[] = {
                 &identifier_token::try_parse,
-                &constant_token::try_parse
+                &literal_token::try_parse,
+                &op_token::try_parse,
             };
 
             for (const auto& p : parsers) {
@@ -228,8 +245,10 @@ int main()
     test_tokenizer("",{make_token(token_type::eof)});
     test_tokenizer("\t\n\r   ",{make_token(token_type::eof)});
     test_tokenizer(" id  ",{make_token(token_type::identifier, "id"), make_token(token_type::eof)});
-    test_tokenizer("3.14",{make_token(token_type::constant, "3.14"), make_token(token_type::eof)});
-    test_tokenizer("\thello 42",{make_token(token_type::identifier, "hello"), make_token(token_type::constant, "42"), make_token(token_type::eof)});
+    test_tokenizer("3.14",{make_token(token_type::literal, "3.14"), make_token(token_type::eof)});
+    test_tokenizer("=\n",{make_token(token_type::op, "="), make_token(token_type::eof)});
+    test_tokenizer("\thello 42",{make_token(token_type::identifier, "hello"), make_token(token_type::literal, "42"), make_token(token_type::eof)});
+    test_tokenizer("\tx + 1e3 = 20",{make_token(token_type::identifier, "x"), make_token(token_type::op, "+"), make_token(token_type::literal, "1e3"), make_token(token_type::op, "="), make_token(token_type::literal, "20"), make_token(token_type::eof)});
 
 #if 0
     const char* const program = R"(
