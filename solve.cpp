@@ -1,86 +1,12 @@
 #include <iostream>
-#include <iomanip>
 #include <initializer_list>
+#include <vector>
 #include <memory>
 #include <sstream>
 #include <stdexcept>
+#include <functional>
 #include <assert.h>
 #include "lex.h"
-
-class token_test {
-public:
-    static void run() {
-        test_tokenizer("", { eof(1,1) });
-        test_tokenizer("\t\n\r   ", { sep(), eof() });
-        test_tokenizer("\nid  ", { sep(), identifier("id", 2, 1), eof() });
-        test_tokenizer("3.14", { literal("3.14"), eof() });
-        test_tokenizer("=\n", { op("="), sep(), eof() });
-        test_tokenizer("\thello 42", { identifier("hello", 1, 8), literal("42"), eof() });
-        test_tokenizer("\nx + 1e3 = 20", { sep(), identifier("x"), op("+"), literal("1e3", 2, 5), op("="), literal("20"), eof() });
-        test_tokenizer("1+2", { literal("1"), op("+"), literal("2"), eof()});
-
-        const char* const program = R"(
-            vals       = 2000
-            valsize    = 8
-            freq       = 1
-            bspersec   = vals * valsize * freq
-            bsperday   = bspersec * 60 * 60 * 24
-            )";
-        test_tokenizer(program, {
-                sep(),
-                identifier("vals"),     op("="), literal("2000"), sep(),
-                identifier("valsize"),  op("="), literal("8"), sep(),
-                identifier("freq"),     op("="), literal("1"), sep(),
-                identifier("bspersec"), op("="), identifier("vals"), op("*"), identifier("valsize"), op("*"), identifier("freq"), sep(),
-                identifier("bsperday"), op("="), identifier("bspersec"), op("*"), literal("60"), op("*"), literal("60"), op("*"), literal("24"), sep(),
-                eof(),
-                });
-    }
-
-private:
-    struct expected_token {
-        expected_token(lex::token_type t, const char* str, size_t line, size_t col) : type(t), str(str), line(line), col(col) {
-        }
-        lex::token_type type;
-        std::string     str;
-        size_t          line;
-        size_t          col;
-
-        void verify(const lex::token& actual) const {
-            if (actual.type() != type || actual.str() != str) {
-                std::cerr << "Tokenizer error. Expeceted " << type << " got " << actual << " at " << actual.position() << std::endl;
-                assert(false);
-            }
-            if ((line && actual.position().line() != line) || (col && actual.position().col() != col)) {
-                std::cerr << "Tokenizer error. Expeceted line " << line << " col " << col << " got " << actual << " at " << actual.position() << std::endl;
-                assert(false);
-            }
-         }
-    };
-
-    static expected_token sep(size_t line=0, size_t col=0) { return expected_token{lex::token_type::separator, "\n", line, col}; };
-    static expected_token eof(size_t line=0, size_t col=0) { return expected_token{lex::token_type::eof, "", line, col}; };
-    static expected_token identifier(const char* str, size_t line=0, size_t col=0) {
-        return expected_token{lex::token_type::identifier, str, line, col};
-    };
-    static expected_token literal(const char* str, size_t line=0, size_t col=0) {
-        return expected_token{lex::token_type::literal, str, line, col};
-    };
-    static expected_token op(const char* str, size_t line=0, size_t col=0) {
-        return expected_token{lex::token_type::op, str, line, col};
-    };
-
-    static void test_tokenizer(const std::string& text, std::initializer_list<expected_token> expected_tokens) {
-        source::file src{text, text};
-        lex::tokenizer t{src};
-        for (const auto& expected_token : expected_tokens) {
-            auto current_token = t.consume();
-            //std::cout << current_token << " " << std::flush;
-            expected_token.verify(current_token);
-        }
-        assert(t.current().type() == lex::token_type::eof);
-    }
-};
 
 namespace ast {
 
@@ -92,9 +18,9 @@ public:
     virtual const lex::token& end_token() const = 0;
 };
 
-class literal_node : public expression {
+class literal_expression : public expression {
 public:
-    literal_node(const lex::token& token) : token_(token) {
+    literal_expression(const lex::token& token) : token_(token) {
         assert(token_.type() == lex::token_type::literal);
     }
 
@@ -238,7 +164,7 @@ private:
         auto tok = tokenizer_.current();
         if (tok.type() == lex::token_type::literal) {
             tokenizer_.consume();
-            return std::unique_ptr<expression>(new literal_node{tok});
+            return std::unique_ptr<expression>(new literal_expression{tok});
         }
         throw parse_error("Expeceted literal in parse_primary_expression");
     }
@@ -253,20 +179,61 @@ private:
 
 } // namespace ast
 
-void foo(const ast::expression& expr)
-{
-    std::cout << "Start = " << expr.start_token().position();
-    std::cout << " End = " << expr.end_token().position();
-    std::cout << " ==> " << expr.repr() << std::endl;
+namespace parser_test {
+
+typedef std::function<void (const ast::expression& expr)> expr_verifier;
+
+void print_expression(const ast::expression& expr) {
+    std::cout << expr.start_token().position() << " ==> " << expr.repr() << std::endl;
 }
+
+expr_verifier lit(double d) {
+    return [=](const ast::expression& e) {
+        if (auto l = dynamic_cast<const ast::literal_expression*>(&e)) {
+            if (std::stod(l->start_token().str()) == d) {
+                return;
+            }
+        }
+        std::cout << "Expected literal " << d << " got:" << std::endl;
+        print_expression(e);
+        assert(false);
+    };
+}
+
+expr_verifier bin_op(char op, const expr_verifier& lhs, const expr_verifier& rhs) {
+    return [=](const ast::expression& e) {
+        if (auto l = dynamic_cast<const ast::binary_operation*>(&e)) {
+            if (l->opinfo().repr[0] == op && l->opinfo().repr[1] == 0) {
+                lhs(l->lhs());
+                rhs(l->rhs());
+                return;
+            }
+        }
+        std::cout << "Expected binary operator " << op << " got:" << std::endl;
+        print_expression(e);
+        assert(false);
+    };
+}
+
+void run_one(const char* name, const char* expr, const expr_verifier& v) {
+    source::file src{name, expr};
+    ast::parser p{src};
+    v(*p.parse_expression());
+    assert(p.eof());
+}
+
+void run()
+{
+    run_one("single literal", "3.141592", lit(3.141592));
+    run_one("simple bin op", "1\t\r+ 2", bin_op('+', lit(1), lit(2)));
+    run_one("precedence test", "1+2*3", bin_op('+', lit(1), bin_op('*', lit(2), lit(3))));
+}
+
+} // namespace parser_test
 
 int main()
 {
-    token_test::run();
-
-    source::file src{"<test>", "1+2*3"};
-    ast::parser p{src};
-    while (!p.eof()) {
-        foo(*p.parse_expression());
-    }
+    extern void lex_test();
+    lex_test();
+    parser_test::run();
 }
