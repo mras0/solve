@@ -177,8 +177,41 @@ private:
     std::queue<item_type> items_;
     std::unordered_set<item_type, item_hash, item_pred> old_items_;
 
+    expr_ptr simplify(expr_ptr e) {
+        double ac, bc;
+        auto bp = expr_cast<bin_op_expr>(*e);
+        if (bp) {
+            if (extract_const(bp->lhs(), ac) && extract_const(bp->rhs(), bc)) {
+                switch (bp->op()) {
+                    case '+': return constant(ac + bc);
+                    case '-': return constant(ac - bc);
+                    case '*': return constant(ac * bc);
+                    case '/': return constant(ac / bc);
+                    default:
+                              std::cout << "Don't know how to handle " << *bp << std::endl;
+                              assert(false);
+                }
+            }
+            if (match_const(bp->lhs(), 0)) {
+                switch (bp->op()) {
+                    case '+': return bp->rhs();
+                    //case '-': return constant(ac - bc);
+                    //case '*': return constant(ac * bc);
+                    //case '/': return constant(ac / bc);
+                    default:
+                              std::cout << "Don't know how to handle " << *bp << std::endl;
+                              assert(false);
+                }
+            }
+            if (match_const(bp->rhs(), 0)) {
+                assert(false);
+            }
+        }
+        return e;
+    }
+
     void push_job(expr_ptr lhs, expr_ptr rhs) {
-        auto job = make_pair(std::move(lhs), std::move(rhs));
+        auto job = make_pair(simplify(std::move(lhs)), simplify(std::move(rhs)));
         if (old_items_.find(job) != old_items_.end()) {
             std::cout << "skipping " << *job.first << "=" << *job.second << std::endl;
             return;
@@ -218,20 +251,7 @@ private:
     }
 
     expr_ptr do_solve_bin_op(const bin_op_expr& a, const expr& b) {
-        double ac, bc;
-        if (extract_const(a.lhs(), ac) && extract_const(a.rhs(), bc)) {
-            switch (a.op()) {
-                case '+': return constant(ac + bc);
-                case '-': return constant(ac - bc);
-                case '*': return constant(ac * bc);
-                case '/': return constant(ac / bc);
-                default:
-                    std::cout << "Don't know how to handle " << a.op() << std::endl;
-                    assert(false);
-            }
-        }
-
-        switch (a.op()) {
+       switch (a.op()) {
             case '+':
                 push_job(a.lhs(), b - a.rhs());
                 push_job(a.rhs(), b - a.lhs());
@@ -271,6 +291,7 @@ void test_solve(const expr_ptr& lhs, const expr_ptr& rhs, const std::string& v, 
     std::cout << "Wrong answer for '" << lhs << "'='" << rhs << "' for '" << v << "'\n";
     std::cout << "Expected: " << value << std::endl;
     std::cout << "Got: '" << s << "'" << std::endl;
+    assert(false);
 }
 
 
@@ -287,5 +308,6 @@ int main()
     // - Avoid doing the same work again in push_job (hash_map of finished jobs)
     // - Isolate each atom in turn, when find(lhs, *match_atom(rhs, the_atom)) returns false we're done
     //
-    test_solve(var("x") * constant(4) + constant(10), var("y"), "x", 0);
+    //test_solve(var("x") * constant(4) + constant(10), var("y"), "x", 0);
+    test_solve(var("x") * constant(4), var("y"), "x", 0);
 }
