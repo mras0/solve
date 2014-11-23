@@ -11,11 +11,11 @@ struct operator_info {
 };
 
 const operator_info op_infos[] = {
-    { "=", 3, false },
     { "*", 2, true },
     { "/", 2, true },
     { "+", 1, true },
     { "-", 1, true },
+    { "=", 0, false },
 };
 
 const operator_info* try_get_op_info(const lex::token& t) {

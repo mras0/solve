@@ -77,7 +77,9 @@ void run_many(const char* name, const char* expr, std::initializer_list<expr_ver
     source::file src{name, expr};
     ast::parser p{src};
     for (const auto& v : vs) {
-        v(*p.parse_expression());
+        auto expr = p.parse_expression();
+//        print_expression(*expr);
+        v(*expr);
     }
     drain(name, p);
 }
@@ -94,6 +96,7 @@ void ast_test()
     run_one("atom op lit", "hello+4e3", bin_op('+', atom("hello"), lit(4000)));
     run_one("bind", "zzz=20", bin_op('=', atom("zzz"), lit(20)));
     run_one("bind2", "a=b=c", bin_op('=', atom("a"), bin_op('=', atom("b"), atom("c"))));
+    run_one("bind with expr", "x=1+2", bin_op('=', atom("x"), bin_op('+', lit(1), lit(2))));
 
     run_many("multiple lines", R"(
         2+xx
@@ -102,7 +105,6 @@ void ast_test()
         bin_op('+', lit(2), atom("xx")),
         bin_op('-', lit(42), lit(60)),
     });
-#if 0
     run_many("program", R"(
         vals       = 2000
         valsize    = 8
@@ -110,6 +112,10 @@ void ast_test()
         bspersec   = vals * valsize * freq
         bsperday   = bspersec * 60 * 60 * 24
     )", {
+        bin_op('=', atom("vals"), lit(2000)),
+        bin_op('=', atom("valsize"), lit(8)),
+        bin_op('=', atom("freq"), lit(1)),
+        bin_op('=', atom("bspersec"), bin_op('*', bin_op('*', atom("vals"), atom("valsize")), atom("freq"))),
+        bin_op('=', atom("bsperday"), bin_op('*', bin_op('*', bin_op('*', atom("bspersec"), lit(60)), lit(60)), lit(24))),
     });
-#endif
 }
