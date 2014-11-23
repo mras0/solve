@@ -81,7 +81,6 @@ void run_many(const char* name, const char* expr, std::initializer_list<expr_ver
     }
     drain(name, p);
 }
-
 } // unnamed namespace
 
 void ast_test()
@@ -93,6 +92,7 @@ void ast_test()
     run_one("all ops", "2/3*4-5+6", bin_op('+',bin_op('-', bin_op('*', bin_op('/', lit(2), lit(3)), lit(4)), lit(5)), lit(6)));
     run_one("atom test", "x", atom("x"));
     run_one("atom op lit", "hello+4e3", bin_op('+', atom("hello"), lit(4000)));
+    run_one("bind", "zzz=20", bin_op('=', atom("zzz"), lit(20)));
 
     run_many("multiple lines", R"(
         2+xx

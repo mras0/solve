@@ -4,33 +4,19 @@
 #include <stdexcept>
 
 namespace {
-const ast::operator_info op_infos[] = {
-    { "*", 2, true, true },
-    { "/", 2, true, true },
-    { "+", 1, true, true },
-    { "-", 1, true, true },
+const ast::binary_operation::operator_info op_infos[] = {
+    { "=", 3, false },
+    { "*", 2, true },
+    { "/", 2, true },
+    { "+", 1, true },
+    { "-", 1, true },
 };
-const ast::operator_info* try_get_op_info(const lex::token& t) {
+
+const ast::binary_operation::operator_info* try_get_op_info(const lex::token& t) {
     for (const auto& i : op_infos) {
         if (t.str() == i.repr) return &i;
     }
     return nullptr;
-}
-
-const ast::operator_info& get_op_info(const lex::token& t) {
-    if (auto i = try_get_op_info(t)) {
-        return *i;
-    }
-    std::ostringstream oss;
-    oss << "Not an operator " << t;
-    throw std::logic_error(oss.str());
-}
-
-bool is_bin_op(const lex::token& t) {
-    if (auto i = try_get_op_info(t)) {
-        return i->is_binary;
-    }
-    return false;
 }
 
 } // unnamed namespace
@@ -51,7 +37,6 @@ binary_expression::binary_expression(std::unique_ptr<expression> lhs, std::uniqu
 }
 
 binary_operation::binary_operation(std::unique_ptr<expression> lhs, std::unique_ptr<expression> rhs, const operator_info& opinfo) : binary_expression(std::move(lhs), std::move(rhs)) , opinfo_(opinfo) {
-    assert(opinfo_.is_binary);
 }
 
 std::string binary_operation::repr() const {
@@ -77,12 +62,12 @@ std::unique_ptr<expression> parser::parse_expression_1(std::unique_ptr<expressio
     for (;;) {
         // while lookahead is a binary operator whose precedence is >= min_precedence
         auto lookahead = tokenizer_.current();
-        if (!is_bin_op(lookahead)) {
+        auto lhs_opinfo = try_get_op_info(lookahead);
+        if (!lhs_opinfo) {
             break;
         }
-        auto lhs_opinfo = get_op_info(lookahead);
 
-        if (lhs_opinfo.precedence < min_precedence) {
+        if (lhs_opinfo->precedence < min_precedence) {
             // Precedence is not >= min_precedence
             break;
         }
@@ -94,32 +79,27 @@ std::unique_ptr<expression> parser::parse_expression_1(std::unique_ptr<expressio
             // while lookahead is a binary operator whose precedence is greater
             // than op's, or a right-associative operator whose precedence is equal to op's
             lookahead = tokenizer_.current();
-            if (!is_bin_op(lookahead)) {
-                    break;
-            }
-            auto rhs_opinfo = get_op_info(lookahead);
-
-            if (!rhs_opinfo.is_binary) {
-                // Not binary
+            auto rhs_opinfo = try_get_op_info(lookahead);
+            if (!rhs_opinfo) {
                 break;
             }
 
-            if (rhs_opinfo.precedence == lhs_opinfo.precedence) {
-                if (rhs_opinfo.is_left_associative) {
+            if (rhs_opinfo->precedence == lhs_opinfo->precedence) {
+                if (rhs_opinfo->is_left_associative) {
                     break;
                 }
                 // right-associative and equal precedence
-            } else if (rhs_opinfo.precedence < lhs_opinfo.precedence) {
+            } else if (rhs_opinfo->precedence < lhs_opinfo->precedence) {
                 break;
             }
 
             // the rhs operator has greater precedence (or equal but is right-associative)
             // recurse
-            rhs = parse_expression_1(std::move(rhs), rhs_opinfo.precedence);
+            rhs = parse_expression_1(std::move(rhs), rhs_opinfo->precedence);
         }
 
         // lhs := the result of applying op with operands lhs and rhs
-        lhs = std::unique_ptr<expression>{new binary_operation{std::move(lhs), std::move(rhs), lhs_opinfo}};
+        lhs = std::unique_ptr<expression>{new binary_operation{std::move(lhs), std::move(rhs), *lhs_opinfo}};
     }
     return lhs;
 }

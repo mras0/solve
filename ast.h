@@ -50,15 +50,14 @@ private:
     virtual const lex::token& end_token() const override { return rhs_->end_token(); }
 };
 
-struct operator_info {
-    const char* repr;
-    int precedence;
-    bool is_binary;
-    bool is_left_associative;
-};
-
 class binary_operation : public binary_expression {
 public:
+    struct operator_info {
+        const char* repr;
+        int precedence;
+        bool is_left_associative;
+    };
+
     binary_operation(std::unique_ptr<expression> lhs, std::unique_ptr<expression> rhs, const operator_info& opinfo);
     const operator_info& opinfo() const { return opinfo_; }
     virtual std::string repr() const override;
