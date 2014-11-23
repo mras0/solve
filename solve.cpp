@@ -1,5 +1,6 @@
 #include <iostream>
 #include <sstream>
+#include <queue>
 #include <assert.h>
 #include "ast.h"
 
@@ -15,6 +16,10 @@ class expr {
 public:
     virtual ~expr() {}
     virtual std::unique_ptr<expr> clone() const = 0;
+
+    operator std::unique_ptr<expr>() const {
+        return clone();
+    }
 
     friend std::ostream& operator<<(std::ostream& os, const expr& e) {
         e.print(os);
@@ -96,38 +101,120 @@ std::ostream& operator<<(std::ostream& os, const expr_ptr& e) {
     return os;
 }
 
-template<typename T>
-const T* expr_cast(const expr_ptr& e) {
-    return dynamic_cast<const T*>(e.get());
+template<typename T, typename E>
+const T* expr_cast(const E& e) {
+    return dynamic_cast<const T*>(&e);
 }
 
-bool match_const(const expr_ptr& e, const double& v) {
+bool match_const(const expr& e, const double& v) {
     auto cp = expr_cast<const_expr>(e);
     return cp && cp->value() == v;
 }
 
-bool match_var(const expr_ptr& e, const std::string& v) {
+bool extract_const(const expr& e, double& v) {
+    if (auto cp = expr_cast<const_expr>(e)) {
+        v = cp->value();
+        return true;
+    }
+    v = 0;
+    return false;
+}
+
+bool match_var(const expr& e, const std::string& v) {
     auto vp = expr_cast<var_expr>(e);
     return vp && vp->name() == v;
 }
 
-// Solve the equation "e" for variable "v"
-expr_ptr solve(const expr_ptr& lhs, const expr_ptr& rhs, const std::string& v) {
-    if (match_var(lhs, v)) {
-        return rhs->clone();
-    }
-    if (match_var(rhs, v)) {
-        return lhs->clone();
+struct solver {
+    explicit solver(const std::string& v) : v_(v) {}
+
+    expr_ptr solve(const expr& lhs, const expr& rhs) {
+        items_ = std::queue<item_type>{};
+        push_job(lhs.clone(), rhs.clone());
+        return do_solve_1();
     }
 
-    std::ostringstream oss;
-    oss << "Unable to solve '" << lhs << "'='" << rhs << "' for '" << v << "'";
-    throw std::runtime_error(oss.str());
-}
+    // Solve the equation "e" for variable "v"
+private:
+    typedef std::pair<expr_ptr, expr_ptr> item_type;
+    std::string v_;
+    std::queue<item_type> items_;
+
+    void push_job(expr_ptr lhs, expr_ptr rhs) {
+        items_.push(make_pair(std::move(lhs), std::move(rhs)));
+    }
+
+    expr_ptr do_solve_1() {
+        while (!items_.empty()) {
+            auto& top = items_.front();
+            if (auto e = do_solve(*top.first, *top.second)) {
+                return e;
+            }
+            items_.pop();
+        }
+        assert(false);
+        return nullptr;
+    }
+
+    expr_ptr do_solve(const expr& lhs, const expr& rhs) {
+        double val;
+        std::cout << ">>>solve lhs=" << lhs << " rhs=" << rhs << std::endl;
+        if (match_var(lhs, v_) && extract_const(rhs, val)) {
+            return constant(val);
+        }
+        if (match_var(rhs, v_) && extract_const(lhs, val)) {
+            return constant(val);
+        }
+        if (auto bp = expr_cast<bin_op_expr>(lhs)) {
+            return do_solve_bin_op(*bp, rhs);
+        }
+        if (auto bp = expr_cast<bin_op_expr>(rhs)) {
+            return do_solve_bin_op(*bp, lhs);
+        }
+        assert(false);
+        return nullptr;
+    }
+
+    expr_ptr do_solve_bin_op(const bin_op_expr& a, const expr& b) {
+        double ac, bc;
+        if (extract_const(a.lhs(), ac) && extract_const(a.rhs(), bc)) {
+            switch (a.op()) {
+                case '+': return constant(ac + bc);
+                case '-': return constant(ac - bc);
+                case '*': return constant(ac * bc);
+                case '/': return constant(ac / bc);
+                default:
+                    std::cout << "Don't know how to handle " << a.op() << std::endl;
+                    assert(false);
+            }
+        }
+
+        switch (a.op()) {
+            case '*':
+                push_job(a.lhs(), b / a.rhs());
+                push_job(a.rhs(), b / a.lhs());
+                break;
+            case '/':
+                push_job(a.lhs(), b * a.rhs());
+                push_job(a.rhs(), b * a.lhs());
+                break;
+            default:
+                std::cout << "Don't know how to handle " << a.op() << std::endl;
+                assert(false);
+        }
+        return nullptr;
+    }
+};
 
 void test_solve(const expr_ptr& lhs, const expr_ptr& rhs, const std::string& v, double value) {
-    auto s = solve(lhs, rhs, v);
-    if (match_const(s, value)) {
+    solver solv{v};
+    auto s = solv.solve(*lhs, *rhs);
+    if (!s) {
+        std::cout << "Unable to solve '" << lhs << "'='" << rhs << "' for '" << v << "'" << std::endl;
+        assert(false);
+    }
+    if (match_const(*s, value)) {
+        std::cout << "OK: " << lhs << "=" << rhs << " ==> " << v << "=" << *s << std::endl;
         return;
     }
 
@@ -143,5 +230,5 @@ int main()
 
     test_solve(var("x"), constant(8), "x", 8);
     test_solve(constant(42), var("x"), "x", 42);
-//    std::cout << solve(constant(2) * var("x"), constant(8), "x") << std::endl;
+    test_solve(constant(2) * var("x"), constant(8), "x", 4);
 }
