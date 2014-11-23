@@ -4,7 +4,13 @@
 #include <stdexcept>
 
 namespace {
-const ast::binary_operation::operator_info op_infos[] = {
+struct operator_info {
+    const char* repr;
+    int precedence;
+    bool is_left_associative;
+};
+
+const operator_info op_infos[] = {
     { "=", 3, false },
     { "*", 2, true },
     { "/", 2, true },
@@ -12,7 +18,7 @@ const ast::binary_operation::operator_info op_infos[] = {
     { "-", 1, true },
 };
 
-const ast::binary_operation::operator_info* try_get_op_info(const lex::token& t) {
+const operator_info* try_get_op_info(const lex::token& t) {
     for (const auto& i : op_infos) {
         if (t.str() == i.repr) return &i;
     }
@@ -36,12 +42,12 @@ binary_expression::binary_expression(std::unique_ptr<expression> lhs, std::uniqu
     assert(lhs_->start_token().position() < rhs_->end_token().position());
 }
 
-binary_operation::binary_operation(std::unique_ptr<expression> lhs, std::unique_ptr<expression> rhs, const operator_info& opinfo) : binary_expression(std::move(lhs), std::move(rhs)) , opinfo_(opinfo) {
+binary_operation::binary_operation(std::unique_ptr<expression> lhs, std::unique_ptr<expression> rhs, char op) : binary_expression(std::move(lhs), std::move(rhs)), op_(op) {
 }
 
 std::string binary_operation::repr() const {
     std::ostringstream oss;
-    oss << "{" << opinfo_.repr << " " << lhs().repr() << " " << rhs().repr() << "}";
+    oss << "{" << op_ << " " << lhs().repr() << " " << rhs().repr() << "}";
     return oss.str();
 }
 
@@ -99,7 +105,7 @@ std::unique_ptr<expression> parser::parse_expression_1(std::unique_ptr<expressio
         }
 
         // lhs := the result of applying op with operands lhs and rhs
-        lhs = std::unique_ptr<expression>{new binary_operation{std::move(lhs), std::move(rhs), *lhs_opinfo}};
+        lhs = std::unique_ptr<expression>{new binary_operation{std::move(lhs), std::move(rhs), lhs_opinfo->repr[0]}};
     }
     return lhs;
 }

@@ -52,17 +52,11 @@ private:
 
 class binary_operation : public binary_expression {
 public:
-    struct operator_info {
-        const char* repr;
-        int precedence;
-        bool is_left_associative;
-    };
-
-    binary_operation(std::unique_ptr<expression> lhs, std::unique_ptr<expression> rhs, const operator_info& opinfo);
-    const operator_info& opinfo() const { return opinfo_; }
+    binary_operation(std::unique_ptr<expression> lhs, std::unique_ptr<expression> rhs, char op);
     virtual std::string repr() const override;
+    char op() const { return op_; }
 private:
-    operator_info opinfo_;
+    char op_;
 };
 
 

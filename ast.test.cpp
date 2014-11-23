@@ -42,7 +42,7 @@ expr_verifier atom(const std::string& s) {
 expr_verifier bin_op(char op, const expr_verifier& lhs, const expr_verifier& rhs) {
     return [=](const ast::expression& e) {
         if (auto l = dynamic_cast<const ast::binary_operation*>(&e)) {
-            if (l->opinfo().repr[0] == op && l->opinfo().repr[1] == 0) {
+            if (l->op() == op) {
                 lhs(l->lhs());
                 rhs(l->rhs());
                 return;
@@ -93,6 +93,7 @@ void ast_test()
     run_one("atom test", "x", atom("x"));
     run_one("atom op lit", "hello+4e3", bin_op('+', atom("hello"), lit(4000)));
     run_one("bind", "zzz=20", bin_op('=', atom("zzz"), lit(20)));
+    run_one("bind2", "a=b=c", bin_op('=', atom("a"), bin_op('=', atom("b"), atom("c"))));
 
     run_many("multiple lines", R"(
         2+xx
