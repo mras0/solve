@@ -19,6 +19,8 @@ class literal_expression : public expression {
 public:
     literal_expression(const lex::token& token);
 
+    double value() const { return std::stod(token_.str()); }
+
     virtual std::string repr() const override { return "{literal " + token_.str() + "}"; }
     virtual const lex::token& start_token() const override { return token_; }
     virtual const lex::token& end_token() const override { return token_; }
@@ -29,6 +31,8 @@ private:
 class atom_expression : public expression {
 public:
     atom_expression(const lex::token& token);
+
+    std::string id() const { return token_.str(); }
 
     virtual std::string repr() const override { return "{atom " + token_.str() + "}"; }
     virtual const lex::token& start_token() const override { return token_; }

@@ -15,7 +15,7 @@ void print_expression(const ast::expression& expr) {
 expr_verifier lit(double d) {
     return [=](const ast::expression& e) {
         if (auto l = dynamic_cast<const ast::literal_expression*>(&e)) {
-            if (std::stod(l->start_token().str()) == d) {
+            if (l->value() == d) {
                 return;
             }
         }
