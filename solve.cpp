@@ -1,7 +1,4 @@
 #include <iostream>
-#include <map>
-#include <vector>
-#include <sstream>
 #include <assert.h>
 #include "ast.h"
 
@@ -13,49 +10,86 @@ void test()
     ast_test();
 }
 
-template<typename Derived>
-struct ast_visitor {
+class expr {
+public:
+    virtual ~expr() {}
+
+    friend std::ostream& operator<<(std::ostream& os, const expr& e) {
+        e.print(os);
+        return os;
+    }
+
 protected:
-    template<typename Arg>
-    bool try_visit(const ast::expression& arg, void (Derived::* f)(const Arg&)) {
-        if (auto a = dynamic_cast<const Arg*>(&arg)) {
-            (static_cast<Derived&>(*this).*f)(*a);
-            return true;
-        }
-        return false;
+    expr() {}
+
+private:
+    virtual void print(std::ostream& os) const = 0;
+};
+
+class const_expr : public expr {
+public:
+    explicit const_expr(double value) : value_(value) {}
+    double value() const { return value_; }
+private:
+    double value_;
+    virtual void print(std::ostream& os) const override {
+        os << value_;
     }
 };
 
-struct visitor : public ast_visitor<visitor> {
-
-    void do_it(const ast::expression& e) {
-        try_visit(e, &visitor::visit_bin_op);
-        std::cout << "In " << __func__ << " e: " << e.repr() << std::endl;
-        assert(false);
-    }
-
-    void visit_bin_op(const ast::binary_operation& e) {
-        if (e.op() == '=') {
-            std::cout << "Handle bind of " << e.lhs().repr() << " and " << e.rhs().repr() << "\n";
-        }
+class var_expr : public expr {
+public:
+    explicit var_expr(const std::string& name) : name_(name) {}
+    std::string name() const { return name_; }
+private:
+    std::string name_;
+    virtual void print(std::ostream& os) const override {
+        os << name_;
     }
 };
+
+class bin_op_expr : public expr {
+public:
+    bin_op_expr(std::unique_ptr<expr> lhs, std::unique_ptr<expr> rhs, char op) : lhs_(std::move(lhs)), rhs_(std::move(rhs)), op_(op) {}
+    const expr& lhs() const { return *lhs_; }
+    const expr& rhs() const { return *rhs_; }
+    char op() const { return op_; }
+private:
+    std::unique_ptr<expr> lhs_;
+    std::unique_ptr<expr> rhs_;
+    char op_;
+    virtual void print(std::ostream& os) const override {
+        os << "{" << op_ << " " << lhs() << " " << rhs() << "}";
+    }
+};
+
+std::unique_ptr<expr> constant(double d) { return std::unique_ptr<expr>{new const_expr{d}}; }
+std::unique_ptr<expr> var(const std::string& n) { return std::unique_ptr<expr>{new var_expr{n}}; }
+
+std::unique_ptr<expr> operator+(std::unique_ptr<expr> a, std::unique_ptr<expr> b) {
+    return std::unique_ptr<expr>{new bin_op_expr{std::move(a), std::move(b), '+'}};
+}
+
+std::unique_ptr<expr> operator-(std::unique_ptr<expr> a, std::unique_ptr<expr> b) {
+    return std::unique_ptr<expr>{new bin_op_expr{std::move(a), std::move(b), '-'}};
+}
+
+std::unique_ptr<expr> operator*(std::unique_ptr<expr> a, std::unique_ptr<expr> b) {
+    return std::unique_ptr<expr>{new bin_op_expr{std::move(a), std::move(b), '*'}};
+}
+
+std::unique_ptr<expr> operator/(std::unique_ptr<expr> a, std::unique_ptr<expr> b) {
+    return std::unique_ptr<expr>{new bin_op_expr{std::move(a), std::move(b), '/'}};
+}
+
+std::ostream& operator<<(std::ostream& os, const std::unique_ptr<expr>& e) {
+    os << *e;
+    return os;
+}
 
 int main()
 {
     test();
 
-    const char* const program = R"(
-        2 * x = 8
-        )";
-    source::file src{"<example>", program};
-    ast::parser p{src};
-    std::vector<std::unique_ptr<ast::expression>> exprs;
-    while (!p.eof()) {
-        exprs.emplace_back(p.parse_expression());
-    }
-    visitor v;
-    for (const auto& ep : exprs) {
-        v.do_it(*ep);
-    }
+    std::cout << (constant(10) + var("x")) << std::endl;
 }
