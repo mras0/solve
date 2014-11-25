@@ -303,11 +303,10 @@ int main()
     test_solve(constant(42), var("x"), "x", 42);
     test_solve(constant(2) * var("x"), constant(8), "x", 4);
     // TODO:
-    // - Normalize expression: lhs = rhs -> lhs - rhs = 0 and work from there
     // - Prioritize jobs by "badness"[not good] ("clean" rhs good? less tree depth good?)
     // - Avoid doing the same work again in push_job (hash_map of finished jobs)
     // - Isolate each atom in turn, when find(lhs, *match_atom(rhs, the_atom)) returns false we're done
     //
     //test_solve(var("x") * constant(4) + constant(10), var("y"), "x", 0);
-    test_solve(var("x") * constant(4), var("y"), "x", 0);
+    //test_solve(var("x") * constant(4), var("y"), "x", 0);
 }
