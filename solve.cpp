@@ -2,6 +2,7 @@
 #include <sstream>
 #include <queue>
 #include <unordered_set>
+#include <set>
 #include <functional>
 #include <assert.h>
 #include "ast.h"
@@ -209,11 +210,11 @@ private:
 
 template<typename A>
 struct var_matcher {
-    typedef typename std::result_of<A(const var_expr&)>::type result_type;
+    typedef typename std::result_of<A(const std::string&)>::type result_type;
     var_matcher(const A& a) : a_(a) {}
     result_type operator()(const expr& e) {
         if (auto ve = expr_cast<var_expr>(e)) {
-            return a_(*ve);
+            return a_(ve->name());
         }
         return result_type{};
     }
@@ -368,7 +369,8 @@ expr_ptr simplify_bin_op(const bin_op_expr& e) {
             return simplify_bin_const_const(e.op(), l, r);
         }
         return simplify_bin_const_expr(e.op(), l, *rhs);
-    } else if (const_m(binder_m(r))(*rhs)) {
+    }
+    if (const_m(binder_m(r))(*rhs)) {
         return simplify_bin_expr_const(e.op(), *lhs, r);
     }
     return expr_ptr{};
@@ -385,6 +387,16 @@ expr_ptr simplify(const expr& e) {
         return res;
     }
     return e;
+}
+
+void test_simplify(const expr_ptr& e, const expr_ptr& expected) {
+    auto simplified = simplify(*e);
+    if (!simplified->equal(*expected)) {
+        std::cerr << "Simplification of " << *e << " failed.\n";
+        std::cerr << "Expected: " << *expected << "\n";
+        std::cerr << "Got: " << *simplified << "\n";
+        assert(false);
+    }
 }
 
 void simplify_test()
@@ -414,16 +426,9 @@ void simplify_test()
         // Some combined tests
         { constant(0) + var("x") * constant(1), var("x") },
         { var("x") * (var("x") * (constant(2) - constant(2))), constant(0) },
-
     };
     for (const auto& test : simplification_tests) {
-        auto simplified = simplify(*test.first);
-        if (!simplified->equal(*test.second)) {
-            std::cerr << "Simplification of " << *test.first << " failed.\n";
-            std::cerr << "Expected: " << *test.second << "\n";
-            std::cerr << "Got: " << *simplified << "\n";
-            assert(false);
-        }
+        test_simplify(test.first, test.second);
     }
 }
 
@@ -465,13 +470,15 @@ public:
         }
         std::swap(job.first, job.second);
         if (old_items_.find(job) != old_items_.end()) {
-            std::cout << "skipping " << job << " because of symmetry!" << std::endl;
+            //std::cout << "skipping " << job << " because of symmetry!" << std::endl;
             return;
         }
         std::swap(job.first, job.second);
         auto res = old_items_.emplace(std::move(job));
         assert(res.second && "item already found in old_items_");
         items_.push(&*res.first);
+
+        assert(items_.size() < 100);
     }
 
     const job_type& next() {
@@ -492,6 +499,40 @@ private:
 ////////////////////////////
 // SOLVER
 ////////////////////////////
+
+void do_find_vars_in_expr(const expr& e, std::set<std::string>& vars) {
+    auto lm = 
+        or_m(neg_m([&](const expr& ne) {
+                    do_find_vars_in_expr(ne, vars);
+                    return true; }),
+                bin_op_m([&](const bin_op_expr& be) {
+                    do_find_vars_in_expr(be.lhs(), vars);
+                    do_find_vars_in_expr(be.rhs(), vars);
+                    return true; }),
+                const_m([&](double) {
+                    return true;
+                    }),
+                var_m([&](const std::string& name) {
+                    vars.insert(name);
+                    return true; })
+            );
+
+    if (!lm(e)) {
+        std::cout << e << std::endl;
+        assert(false);
+    }
+}
+
+std::set<std::string> find_vars_in_expr(const expr& e) {
+    std::set<std::string> vars;
+    do_find_vars_in_expr(e, vars);
+    return vars;
+}
+
+bool expr_has_var(const expr& e, const std::string& v) {
+    auto vars = find_vars_in_expr(e);
+    return vars.find(v) != vars.end();
+}
 
 class solver {
 public:
@@ -518,9 +559,9 @@ private:
             const auto& lhs = *job.first;
             const auto& rhs = *job.second;
             std::cout << ">>> solve lhs=" << lhs << " rhs=" << rhs << std::endl;
-            if (match_var(lhs, v_)) {
+            if (match_var(lhs, v_) && !expr_has_var(rhs, v_)) {
                 return rhs;
-            } else if (match_var(rhs, v_)) {
+            } else if (match_var(rhs, v_) && !expr_has_var(lhs, v_)) {
                 return lhs;
             } else {
                 do_solve_lhs(lhs, rhs);
@@ -535,7 +576,7 @@ private:
             or_m(neg_m([&](const expr& ne) { items_.add(ne, -rhs); return true; }),
                 bin_op_m([&](const bin_op_expr& be) { do_solve_bin_op(be, rhs); return true; }),
                 const_m([&](double) { items_.add(constant(0), rhs - lhs); return true; }),
-                var_m([&](const var_expr&) { items_.add(constant(0), rhs - lhs); return true; })
+                var_m([&](const std::string&) { items_.add(constant(0), rhs - lhs); return true; })
                 );
 
         if (!lm(lhs)) {
@@ -576,6 +617,28 @@ private:
     }
 };
 
+std::ostream& operator<<(std::ostream& os, const std::set<std::string>& ss) {
+    os << "{";
+    for (const auto& s : ss) {
+        os << " " << s;
+    }
+    os << " }";
+    return os;
+}
+
+void test_find_vars_in_expr(const expr_ptr& e, const std::set<std::string>& expected) {
+    auto res = find_vars_in_expr(*e);
+    if (res != expected) {
+        std::cout << "find_vars_in_expr failed for " << *e << std::endl;
+        std::cout << "Expected: " << expected << std::endl;
+        std::cout << "Got: " << res << std::endl;
+        assert(false);
+    }
+    for (const auto& var : expected) {
+        assert(expr_has_var(*e, var));
+    }
+}
+
 void test_solve(const expr_ptr& lhs, const expr_ptr& rhs, const std::string& v, const expr_ptr& expected) {
     auto s = solver::solve_for(v, *lhs, *rhs);
     if (!s) {
@@ -592,9 +655,14 @@ void test_solve(const expr_ptr& lhs, const expr_ptr& rhs, const std::string& v, 
     std::cout << "Got: '" << s << "'" << std::endl;
     assert(false);
 }
-
 void solve_test()
 {
+    test_find_vars_in_expr(constant(0), {});
+    test_find_vars_in_expr(var("x"), {"x"});
+    test_find_vars_in_expr(-var("x"), {"x"});
+    test_find_vars_in_expr(var("x")+var("x"), {"x"});
+    test_find_vars_in_expr(var("x")+var("y"), {"x","y"});
+
     test_solve(var("x"), constant(8), "x", constant(8));
     test_solve(constant(42), var("x"), "x", constant(42));
     test_solve(constant(2) * var("x"), constant(8), "x", constant(4));
@@ -618,4 +686,7 @@ int main()
     ast_test();
     simplify_test();
     solve_test();
+    // Goal: test_solve(var("x") * constant(2), var("x") - constant(1), "x", constant(-1));
+    // Subgoal:
+    //test_simplify(var("x") - (var("x") * constant(2)), var("x"));
 }
