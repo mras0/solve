@@ -208,6 +208,21 @@ private:
 };
 
 template<typename A>
+struct var_matcher {
+    typedef typename std::result_of<A(const var_expr&)>::type result_type;
+    var_matcher(const A& a) : a_(a) {}
+    result_type operator()(const expr& e) {
+        if (auto ve = expr_cast<var_expr>(e)) {
+            return a_(*ve);
+        }
+        return result_type{};
+    }
+private:
+    A a_;
+};
+
+
+template<typename A>
 struct bin_op_matcher {
     typedef typename std::result_of<A(const bin_op_expr&)>::type result_type;
     bin_op_matcher(const A& a) : a_(a) {}
@@ -273,6 +288,9 @@ binder<T> binder_m(T& x) { return binder<T>(x); }
 
 template<typename A>
 const_matcher<A> const_m(const A& a) { return const_matcher<A>(a); }
+
+template<typename A>
+var_matcher<A> var_m(const A& a) { return var_matcher<A>(a); }
 
 template<typename A>
 neg_matcher<A> neg_m(const A& a) { return neg_matcher<A>(a); }
@@ -445,6 +463,12 @@ public:
             //std::cout << "skipping " << job << std::endl;
             return;
         }
+        std::swap(job.first, job.second);
+        if (old_items_.find(job) != old_items_.end()) {
+            std::cout << "skipping " << job << " because of symmetry!" << std::endl;
+            return;
+        }
+        std::swap(job.first, job.second);
         auto res = old_items_.emplace(std::move(job));
         assert(res.second && "item already found in old_items_");
         items_.push(&*res.first);
@@ -499,38 +523,25 @@ private:
             } else if (match_var(rhs, v_)) {
                 return lhs;
             } else {
-                do_solve(lhs, rhs);
+                do_solve_lhs(lhs, rhs);
+                do_solve_lhs(rhs, lhs);
             }
         }
         return nullptr;
     }
 
-    void do_solve(const expr& lhs, const expr& rhs) {
-        if (auto np = expr_cast<negation_expr>(lhs)) {
-            do_solve_neg(*np, rhs);
-        } else if (auto bp = expr_cast<bin_op_expr>(lhs)) {
-            do_solve_bin_op(*bp, rhs);
-        } else if (expr_cast<const_expr>(lhs) || expr_cast<var_expr>(lhs)) {
-            items_.add(constant(0), rhs - lhs);
-        } else {
+    void do_solve_lhs(const expr& lhs, const expr& rhs) {
+        auto lm = 
+            or_m(neg_m([&](const expr& ne) { items_.add(ne, -rhs); return true; }),
+                bin_op_m([&](const bin_op_expr& be) { do_solve_bin_op(be, rhs); return true; }),
+                const_m([&](double) { items_.add(constant(0), rhs - lhs); return true; }),
+                var_m([&](const var_expr&) { items_.add(constant(0), rhs - lhs); return true; })
+                );
+
+        if (!lm(lhs)) {
             std::cout << lhs << std::endl;
             assert(false);
         }
-        if (auto np = expr_cast<negation_expr>(rhs)) {
-            do_solve_neg(*np, lhs);
-        } else if (auto bp = expr_cast<bin_op_expr>(rhs)) {
-            do_solve_bin_op(*bp, lhs);
-        } else if (expr_cast<const_expr>(rhs) || expr_cast<var_expr>(rhs)) {
-            items_.add(constant(0), lhs - rhs);
-        } else {
-            std::cout << rhs << std::endl;
-            assert(false);
-        }
-    }
-
-    // Rewrite {-n.e, r} to {n.e, -r}
-    void do_solve_neg(const negation_expr& n, const expr& r) {
-        items_.add(n.e(), -r);
     }
 
     // Rewrite {a.lhs OP a.rhs, b} using our knowledge of "OP"
