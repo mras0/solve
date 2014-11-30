@@ -171,47 +171,247 @@ bool match_var(const expr& e, const std::string& v) {
     return vp && vp->name() == v;
 }
 
-expr_ptr simplify(expr_ptr e) {
-    if (auto np = expr_cast<negation_expr>(*e)) {
-        const auto& negated_e = np->e();
-        double c;
-        if (auto nnp = expr_cast<negation_expr>(negated_e)) { // -(-(e))
-            return nnp->e();
-        } else if (extract_const(negated_e, c)) { // -constant
-            return constant(-c);
+////////////////////////////
+// SIMPLIFY
+////////////////////////////
+
+#include <tuple>
+#include <type_traits>
+
+template<typename A>
+struct const_matcher {
+public:
+    typedef typename std::result_of<A(double)>::type result_type;
+    const_matcher(const A& a) : a_(a) {}
+    result_type operator()(const expr& e) {
+        if (auto ce = expr_cast<const_expr>(e)) {
+            return a_(ce->value());
         }
-        // No simplifaction can be done
-        return e;
-    } else if (auto bp = expr_cast<bin_op_expr>(*e)) {
-        double ac, bc;
-        if (extract_const(bp->lhs(), ac) && extract_const(bp->rhs(), bc)) {
-            switch (bp->op()) {
-                case '+': return constant(ac + bc);
-                case '-': return constant(ac - bc);
-                case '*': return constant(ac * bc);
-                case '/': return constant(ac / bc);
-                default:
-                          std::cout << "Don't know how to handle " << *bp << std::endl;
-                          assert(false);
-            }
+        return result_type{};
+    }
+private:
+    A a_;
+};
+
+template<typename A>
+struct neg_matcher {
+    typedef typename std::result_of<A(const expr&)>::type result_type;
+    neg_matcher(const A& a) : a_(a) {}
+    result_type operator()(const expr& e) {
+        if (auto ne = expr_cast<negation_expr>(e)) {
+            return a_(ne->e());
         }
-        if (match_const(bp->lhs(), 0)) {
-            switch (bp->op()) {
-                case '+': return bp->rhs();
-                          //case '-': return constant(ac - bc);
-                          //case '*': return constant(ac * bc);
-                          //case '/': return constant(ac / bc);
-                default:
-                          std::cout << "Don't know how to handle " << *bp << std::endl;
-                          assert(false);
-            }
+        return result_type{};
+    }
+private:
+    A a_;
+};
+
+template<typename A>
+struct bin_op_matcher {
+    typedef typename std::result_of<A(const bin_op_expr&)>::type result_type;
+    bin_op_matcher(const A& a) : a_(a) {}
+    result_type operator()(const expr& e) {
+        if (auto be = expr_cast<bin_op_expr>(e)) {
+            return a_(*be);
         }
-        if (match_const(bp->rhs(), 0)) {
-            assert(false);
+        return result_type{};
+    }
+private:
+    A a_;
+};
+
+template<typename A, typename... As>
+struct or_matcher {
+    typedef typename std::result_of<A(const expr&)>::type result_type;
+
+    or_matcher(const A& a, const As&... as) : as_(a, as...) {
+    }
+
+    result_type operator()(const expr& e) {
+        return iter_helper<0>(as_, e);
+    }
+
+private:
+    typedef std::tuple<A, As...> tuple_type;
+    tuple_type as_;
+
+    template<int N>
+    static typename std::enable_if<N < std::tuple_size<tuple_type>::value, result_type>::type
+    iter_helper(tuple_type& t, const expr& e) {
+        auto& a = std::get<N>(t);
+        if (auto res = a(e)) {
+            return res;
         }
+        return iter_helper<N+1>(t, e);
+    }
+    template<int N>
+    static typename std::enable_if<N == std::tuple_size<tuple_type>::value, result_type>::type
+    iter_helper(tuple_type&, const expr&) {
+        return result_type{};
+    }
+};
+
+template<typename T>
+struct binder {
+    binder(T& x) : x_(&x), bound_(false) {
+    }
+    bool operator()(const T& x) {
+        assert(!bound_);
+        *x_ = x;
+        bound_ = true;
+        return true;
+    }
+    bool bound() const { return bound_; }
+private:
+    T*   x_;
+    bool bound_;
+};
+
+template<typename T>
+binder<T> binder_m(T& x) { return binder<T>(x); }
+
+template<typename A>
+const_matcher<A> const_m(const A& a) { return const_matcher<A>(a); }
+
+template<typename A>
+neg_matcher<A> neg_m(const A& a) { return neg_matcher<A>(a); }
+
+template<typename A>
+bin_op_matcher<A> bin_op_m(const A& a) { return bin_op_matcher<A>(a); }
+
+template<typename A, typename... As>
+or_matcher<A, As...> or_m(const A& a, const As&... as) {
+    return or_matcher<A, As...>(a, as...);
+}
+
+expr_ptr simplify(const expr& e);
+
+expr_ptr simplify_bin_const_const(char op, double l, double r) {
+    switch (op) {
+    case '+': return constant(l + r);
+    case '-': return constant(l - r);
+    case '*': return constant(l * r);
+    case '/': return constant(l / r);
+    }
+    std::cout << "Don't know how to handle " << op << std::endl;
+    assert(false);
+}
+
+expr_ptr simplify_bin_const_expr(char op, double l, const expr& e) {
+    switch (op) {
+    case '+':
+        if (l == 0.0) return e;
+        break;
+    case '-':
+        if (l == 0.0) return -e;
+        break;
+    case '*':
+        if (l == 0.0) return constant(0);
+        if (l == 1.0) return e;
+        break;
+    case '/':
+        if (l == 0.0) return constant(0);
+        break;
+    default:
+        std::cout << "Don't know how to handle " << op << std::endl;
+        assert(false);
+    }
+    return nullptr;
+}
+
+expr_ptr simplify_bin_expr_const(char op, const expr& e, double r) {
+    switch (op) {
+    case '+':
+        if (r == 0.0) return e;
+        break;
+    case '-':
+        if (r == 0.0) return e;
+        break;
+    case '*':
+        if (r == 0.0) return constant(0);
+        if (r == 1.0) return e;
+        break;
+    case '/':
+        break;
+    default:
+        std::cout << "Don't know how to handle " << op << std::endl;
+        assert(false);
+    }
+    return nullptr;
+}
+
+expr_ptr simplify_bin_op(const bin_op_expr& e) {
+    auto lhs = simplify(e.lhs());
+    auto rhs = simplify(e.rhs());
+    double l, r;
+    if (const_m(binder_m(l))(*lhs)) {
+        if (const_m(binder_m(r))(*rhs)) {
+            return simplify_bin_const_const(e.op(), l, r);
+        }
+        return simplify_bin_const_expr(e.op(), l, *rhs);
+    } else if (const_m(binder_m(r))(*rhs)) {
+        return simplify_bin_expr_const(e.op(), *lhs, r);
+    }
+    return expr_ptr{};
+}
+
+expr_ptr simplify(const expr& e) {
+    auto negation_simplification
+        = neg_m(or_m(const_m([](double c) { return constant(-c); }),
+                        neg_m([](const expr& e) { return simplify(e); })
+                       )
+                  );
+    auto m = or_m(negation_simplification, bin_op_m(&simplify_bin_op));
+    if (auto res = m(e)) {
+        return res;
     }
     return e;
 }
+
+void simplify_test()
+{
+    const std::pair<expr_ptr,expr_ptr> simplification_tests[] = {
+        // Identity
+        { constant(2), constant(2) },
+        { var("x"), var("x") },
+        // Negation
+        { -constant(2), constant(-2) },
+        { -(-var("x")), var("x") },
+        // Constant binary expressions
+        { constant(4) + constant(2), constant(6) },
+        { constant(3) - constant(5), constant(-2) },
+        { constant(10) * constant(2), constant(20) },
+        { constant(30) / constant(5), constant(6) },
+        // Various identities
+        { constant(0) + var("x"), var("x") },
+        { var("x") + constant(0), var("x") },
+        { constant(0) - var("x"), -var("x") },
+        { var("x") - constant(0), var("x") },
+        { constant(0) * var("x"), constant(0) },
+        { var("x") * constant(0), constant(0) },
+        { constant(1) * var("x"), var("x") },
+        { var("x") * constant(1), var("x") },
+        { constant(0) / var("x"), constant(0) },
+        // Some combined tests
+        { constant(0) + var("x") * constant(1), var("x") },
+        { var("x") * (var("x") * (constant(2) - constant(2))), constant(0) },
+
+    };
+    for (const auto& test : simplification_tests) {
+        auto simplified = simplify(*test.first);
+        if (!simplified->equal(*test.second)) {
+            std::cerr << "Simplification of " << *test.first << " failed.\n";
+            std::cerr << "Expected: " << *test.second << "\n";
+            std::cerr << "Got: " << *simplified << "\n";
+            assert(false);
+        }
+    }
+}
+
+////////////////////////////
+// JOB LIST
+////////////////////////////
 
 typedef std::pair<expr_ptr, expr_ptr> job_type;
 const job_type empty_job{nullptr, nullptr};
@@ -240,7 +440,7 @@ public:
 
     void add(expr_ptr lhs, expr_ptr rhs) {
         assert(lhs && rhs);
-        auto job = make_pair(simplify(std::move(lhs)), simplify(std::move(rhs)));
+        auto job = make_pair(simplify(*lhs), simplify(*rhs));
         if (old_items_.find(job) != old_items_.end()) {
             //std::cout << "skipping " << job << std::endl;
             return;
@@ -265,6 +465,10 @@ private:
     std::unordered_set<job_type> old_items_;
 };
 
+
+////////////////////////////
+// SOLVER
+////////////////////////////
 
 // Solve the equation "e" for variable "v"
 class solver {
@@ -378,18 +582,8 @@ void test_solve(const expr_ptr& lhs, const expr_ptr& rhs, const std::string& v, 
     assert(false);
 }
 
-// TODO:
-// - Prioritize jobs by "badness"[not good] ("clean" rhs good? less tree depth good?)
-// - Isolate each atom in turn, when find(lhs, *match_atom(rhs, the_atom)) returns false we're done
-// - Take advantage of symmetry (i.e. L=R and R=L are equivalent)
-// - Make simplification rules table based or allow them to be specified in a DSL
-//
-int main()
+void solve_test()
 {
-    extern void lex_test();
-    extern void ast_test();
-    lex_test();
-    ast_test();
     test_solve(var("x"), constant(8), "x", 8);
     test_solve(constant(42), var("x"), "x", 42);
     test_solve(constant(2) * var("x"), constant(8), "x", 4);
@@ -397,4 +591,20 @@ int main()
     test_solve(-(-constant(3)), var("x"), "x", 3);
     //test_solve(var("x") * constant(4) + constant(10), var("y"), "x", 0);
     //test_solve(var("x") * constant(4), var("y"), "x", 0);
+}
+
+// TODO:
+// - Prioritize jobs by "badness"[not good] ("clean" rhs good? less tree depth good?)
+// - Isolate each atom in turn, when find(lhs, *match_atom(rhs, the_atom)) returns false we're done
+// - Take advantage of symmetry (i.e. L=R and R=L are equivalent)
+// - Improve the binary_op simplification...
+//
+int main()
+{
+    extern void lex_test();
+    extern void ast_test();
+    lex_test();
+    ast_test();
+    simplify_test();
+    solve_test();
 }
