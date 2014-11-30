@@ -148,6 +148,10 @@ expr_ptr operator/(expr_ptr a, expr_ptr b) {
     return expr_ptr{new bin_op_expr{std::move(a), std::move(b), '/'}};
 }
 
+expr_ptr do_op(char op, expr_ptr a, expr_ptr b) {
+    return expr_ptr{new bin_op_expr{std::move(a), std::move(b), op}};
+}
+
 std::ostream& operator<<(std::ostream& os, const expr_ptr& e) {
     os << *e;
     return os;
@@ -245,6 +249,25 @@ private:
 };
 template<typename A>
 var_matcher<A> var_m(const A& a) { return var_matcher<A>(a); }
+
+template<typename A>
+struct exact_var_matcher {
+    typedef typename std::result_of<A()>::type result_type;
+    exact_var_matcher(const A& a, const std::string& v) : a_(a), v_(v) {}
+    result_type operator()(const expr& e) {
+        if (auto ve = expr_cast<var_expr>(e)) {
+            if (ve->name() == v_) {
+                return a_();
+            }
+        }
+        return result_type{};
+    }
+private:
+    A a_;
+    std::string v_;
+};
+template<typename A>
+exact_var_matcher<A> exact_var_m(const std::string& v, const A& a) { return exact_var_matcher<A>(a, v); }
 
 template<typename A>
 struct bin_op_matcher {
@@ -356,14 +379,26 @@ expr_ptr simplify_bin_expr_const(char op, const expr& e, double r) {
 expr_ptr simplify_bin_op(char op, const expr& lhs_e, const expr& rhs_e) {
     auto lhs = simplify(lhs_e);
     auto rhs = simplify(rhs_e);
-    auto m = or_m(const_m([&](double l) {
-            auto m2 = or_m(const_m([&](double r) { return simplify_bin_const_const(op, l, r); }),
-                           [&](const expr& e) { return simplify_bin_const_expr(op, l, e); });
-            return m2(*rhs);
+    auto m = or_m(
+            const_m([&](double l) {
+                auto m2 = or_m(const_m([&](double r) { return simplify_bin_const_const(op, l, r); }),
+                               [&](const expr& e) { return simplify_bin_const_expr(op, l, e); });
+                return m2(*rhs);
+            }),
+            var_m([&](const std::string& name) {
+                auto m2= exact_var_m(name, [&]() {
+                        switch (op) {
+                            case '+': return constant(2) * var(name);
+                            case '-': return constant(0);
+                            case '/': return constant(1);
+                        }
+                        return expr_ptr{};
+                    });
+                return m2(*rhs);
             }),
             [&](const expr& e) {
-            auto m2 = const_m([&](double r) { return simplify_bin_expr_const(op, e, r); });
-            return m2(*rhs);
+                auto m2 = const_m([&](double r) { return simplify_bin_expr_const(op, e, r); });
+                return m2(*rhs);
             });
     return m(*lhs);
 }
@@ -408,16 +443,18 @@ void simplify_test()
         // Various identities
         { constant(0) + var("x"), var("x") },
         { var("x") + constant(0), var("x") },
+        { var("x") + var("x"), constant(2) * var("x") },
         { constant(0) - var("x"), -var("x") },
         { var("x") - constant(0), var("x") },
+        { var("x") - var("x"), constant(0) },
         { constant(0) * var("x"), constant(0) },
         { var("x") * constant(0), constant(0) },
         { constant(1) * var("x"), var("x") },
         { var("x") * constant(1), var("x") },
         { constant(0) / var("x"), constant(0) },
+        { var("x") / var("x"), constant(1) },
         // Some combined tests
         { constant(0) + var("x") * constant(1), var("x") },
-        { var("x") * (var("x") * (constant(2) - constant(2))), constant(0) },
     };
     for (const auto& test : simplification_tests) {
         test_simplify(test.first, test.second);
@@ -453,6 +490,9 @@ class job_list {
 public:
     explicit job_list() {}
 
+    void add(std::pair<expr_ptr, expr_ptr>&& j) {
+        add(std::move(j.first), std::move(j.second));
+    }
     void add(expr_ptr lhs, expr_ptr rhs) {
         assert(lhs && rhs);
         auto job = make_pair(simplify(*lhs), simplify(*rhs));
@@ -469,8 +509,6 @@ public:
         auto res = old_items_.emplace(std::move(job));
         assert(res.second && "item already found in old_items_");
         items_.push(&*res.first);
-
-        assert(items_.size() < 100);
     }
 
     const job_type& next() {
@@ -542,7 +580,8 @@ private:
     job_list    items_;
 
     expr_ptr do_solve_all() {
-        for (;;) {
+        for (size_t iter=0; ;++iter)  {
+            assert(iter < 100);
             const auto& job = items_.next();
             if (job == empty_job) {
                 break;
@@ -556,19 +595,19 @@ private:
             } else if (match_var(rhs, v_) && !expr_has_var(lhs, v_)) {
                 return lhs;
             } else {
-                do_solve_lhs(lhs, rhs);
-                do_solve_lhs(rhs, lhs);
+                do_rewrite(lhs, rhs);
+                do_rewrite(rhs, lhs);
             }
         }
         return nullptr;
     }
 
-    void do_solve_lhs(const expr& lhs, const expr& rhs) {
+    void do_rewrite(const expr& lhs, const expr& rhs) {
         auto lm = 
             or_m(neg_m([&](const expr& ne) { items_.add(ne, -rhs); return true; }),
-                bin_op_m([&](char op, const expr& l_lhs, const expr& l_rhs) { do_solve_bin_op(op, l_lhs, l_rhs, rhs); return true; }),
+                bin_op_m([&](char op, const expr& l_lhs, const expr& l_rhs) { do_rewrite_bin_op(op, l_lhs, l_rhs, rhs); return true; }),
                 const_m([&](double) { items_.add(constant(0), rhs - lhs); return true; }),
-                var_m([&](const std::string&) { items_.add(constant(0), rhs - lhs); return true; })
+                var_m([&](const std::string& name) { items_.add(constant(0), rhs - var(name)); return true; })
                 );
 
         if (!lm(lhs)) {
@@ -577,33 +616,49 @@ private:
         }
     }
 
+    void do_rewrite_bin_op(char op, const expr& l, const expr& r, const expr& b) {
+        std::cout << "do_rewrite_bin_op " << l << " " << op << " " << r << " = " << b << std::endl;
+        auto m = or_m(
+                bin_op_m([&](char l_op, const expr& l_lhs, const expr& l_rhs) {
+                    // (l_lhs l_op l_rhs) op r = b
+                    if (op == '*' || op == '/') { // distribute
+                        auto x = do_op(op, l_lhs, r);
+                        auto y = do_op(op, l_rhs, r);
+                        std::cout << "distributed: " << *x << l_op << *y << "=" << b << std::endl;
+                        items_.add(do_op(l_op, std::move(x), std::move(y)), b);
+                    } else if ((op == '+' || op == '-') && (l_op == '+' || l_op == '-')) { // commute
+                        std::cout << "commuting\n";
+                        items_.add(do_op(l_op, l_lhs, do_op(op, l_rhs, r)), r);
+                    }
+                    return true;
+                }),
+                [&](const expr&) {
+                    return true;
+                });
+        m(l);
+
+        // Always do standard rewrite
+        auto is = do_rewrite_bin_op_one(op, l, r, b);
+        items_.add(std::move(is.first));
+        items_.add(std::move(is.second));
+    }
+
+    typedef std::pair<expr_ptr, expr_ptr> e_pair;
     // Rewrite {lhs OP rhs, b} using our knowledge of "OP"
-    void do_solve_bin_op(char op, const expr& l, const expr& r, const expr& b) {
+    std::pair<e_pair, e_pair> do_rewrite_bin_op_one(char op, const expr& l, const expr& r, const expr& b) {
         switch (op) {
-            case '+':
-                // { L + R, B } -> { L, B - R } and { R, B - L }
-                items_.add(l, b - r);
-                items_.add(r, b - l);
-                break;
-            case '-':
-                // { L - R, B } -> { L, B + R } and {  -R, B - L }
-                items_.add(l, b + r);
-                items_.add(-r, b - l);
-                break;
-            case '*':
-                // { L * R, B } -> { L, B / R } and { R, B / L }
-                items_.add(l, b / r);
-                items_.add(r, b / l);
-                break;
-            case '/':
-                // { L / R, B } -> { L, B * R } and { 1 / R, B / L }
-                items_.add(l, b * r);
-                items_.add(constant(1) / r, b / l);
-                break;
-            default:
-                std::cout << "Don't know how to handle " << op << std::endl;
-                assert(false);
+            case '+': // { L + R, B } -> { L, B - R } and { R, B - L }
+                return { e_pair{l, b - r}, e_pair{r, b - l}};
+            case '-': // { L - R, B } -> { L, B + R } and { -R, B - L }
+                return { e_pair{l, b + r}, e_pair{-r, b - l}};
+            case '*': // { L * R, B } -> { L, B / R } and { R, B / L }
+                return { e_pair{l, b / r}, e_pair{r, b / l}};
+            case '/': // { L / R, B } -> { L, B * R } and { 1 / R, B / L }
+                return { e_pair{l, b * r}, e_pair{constant(1) / r, b / l}};
         }
+        std::cout << "Don't know how to handle " << op << std::endl;
+        assert(false);
+        throw std::logic_error("Not implemented");
     }
 };
 
@@ -666,10 +721,11 @@ void solve_test()
 // - Prioritize jobs by "badness"[not good] ("clean" rhs good? less tree depth good?)
 // - Isolate each atom in turn, when find(lhs, *match_atom(rhs, the_atom)) returns false we're done
 // - Take advantage of symmetry (i.e. L=R and R=L are equivalent)
-// - Improve the binary_op simplification...
+// - Improve the tree matching and simplification function(s)
 //
 int main()
 {
+//    test_solve(var("x") * constant(2), var("x") - constant(1), "x", constant(-1));
     extern void lex_test();
     extern void ast_test();
     lex_test();
@@ -677,6 +733,5 @@ int main()
     simplify_test();
     solve_test();
     // Goal: test_solve(var("x") * constant(2), var("x") - constant(1), "x", constant(-1));
-    // Subgoal:
-    //test_simplify(var("x") - (var("x") * constant(2)), var("x"));
+    // Subgoal (but shouldn't be done in simplify..): test_simplify(var("x") - (var("x") * constant(2)), var("x"));
 }
