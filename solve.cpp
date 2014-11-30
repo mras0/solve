@@ -445,7 +445,6 @@ public:
             //std::cout << "skipping " << job << std::endl;
             return;
         }
-        std::cout << "> new job " << job << std::endl;
         auto res = old_items_.emplace(std::move(job));
         assert(res.second && "item already found in old_items_");
         items_.push(&*res.first);
@@ -470,18 +469,18 @@ private:
 // SOLVER
 ////////////////////////////
 
-// Solve the equation "e" for variable "v"
 class solver {
 public:
-    explicit solver(const std::string& v) : v_(v) {}
-
-    expr_ptr solve(const expr& lhs, const expr& rhs) {
-        items_ = job_list{};
-        items_.add(lhs.clone(), rhs.clone());
-        return do_solve_all();
+    // Solve the equation "lhs = rhs" for variable "v"
+    static expr_ptr solve_for(const std::string& v, const expr& lhs, const expr& rhs) {
+        solver s{v};
+        s.items_.add(lhs.clone(), rhs.clone());
+        return s.do_solve_all();
     }
 
 private:
+    explicit solver(const std::string& v) : v_(v) {}
+
     std::string v_;
     job_list    items_;
 
@@ -492,49 +491,52 @@ private:
                 break;
             }
             assert(job.first && job.second);
-            if (auto e = do_solve(*job.first, *job.second)) {
-                return e;
+            const auto& lhs = *job.first;
+            const auto& rhs = *job.second;
+            std::cout << ">>> solve lhs=" << lhs << " rhs=" << rhs << std::endl;
+            if (match_var(lhs, v_)) {
+                return rhs;
+            } else if (match_var(rhs, v_)) {
+                return lhs;
+            } else {
+                do_solve(lhs, rhs);
             }
         }
         return nullptr;
     }
 
-    expr_ptr do_solve(const expr& lhs, const expr& rhs) {
-        double val;
-        std::cout << ">>> solve lhs=" << lhs << " rhs=" << rhs << std::endl;
-        if (match_var(lhs, v_) && extract_const(rhs, val)) {
-            return constant(val);
-        }
-        if (match_var(rhs, v_) && extract_const(lhs, val)) {
-            return constant(val);
-        }
+    void do_solve(const expr& lhs, const expr& rhs) {
         if (auto np = expr_cast<negation_expr>(lhs)) {
-            return do_solve_neg(*np, rhs);
+            do_solve_neg(*np, rhs);
+        } else if (auto bp = expr_cast<bin_op_expr>(lhs)) {
+            do_solve_bin_op(*bp, rhs);
+        } else if (expr_cast<const_expr>(lhs) || expr_cast<var_expr>(lhs)) {
+            items_.add(constant(0), rhs - lhs);
+        } else {
+            std::cout << lhs << std::endl;
+            assert(false);
         }
         if (auto np = expr_cast<negation_expr>(rhs)) {
-            return do_solve_neg(*np, lhs);
+            do_solve_neg(*np, lhs);
+        } else if (auto bp = expr_cast<bin_op_expr>(rhs)) {
+            do_solve_bin_op(*bp, lhs);
+        } else if (expr_cast<const_expr>(rhs) || expr_cast<var_expr>(rhs)) {
+            items_.add(constant(0), lhs - rhs);
+        } else {
+            std::cout << rhs << std::endl;
+            assert(false);
         }
-        if (auto bp = expr_cast<bin_op_expr>(lhs)) {
-            return do_solve_bin_op(*bp, rhs);
-        }
-        if (auto bp = expr_cast<bin_op_expr>(rhs)) {
-            return do_solve_bin_op(*bp, lhs);
-        }
-        assert(false);
-        return nullptr;
     }
 
     // Rewrite {-n.e, r} to {n.e, -r}
-    expr_ptr do_solve_neg(const negation_expr& n, const expr& r) {
+    void do_solve_neg(const negation_expr& n, const expr& r) {
         items_.add(n.e(), -r);
-        return nullptr;
     }
 
     // Rewrite {a.lhs OP a.rhs, b} using our knowledge of "OP"
-    expr_ptr do_solve_bin_op(const bin_op_expr& a, const expr& b) {
+    void do_solve_bin_op(const bin_op_expr& a, const expr& b) {
         auto& l = a.lhs();
         auto& r = a.rhs();
-        std::cout << "> solve bin op " << l << " " << a.op() << " " << r << " = " << b << std::endl;
         switch (a.op()) {
             case '+':
                 // { L + R, B } -> { L, B - R } and { R, B - L }
@@ -560,37 +562,35 @@ private:
                 std::cout << "Don't know how to handle " << a.op() << std::endl;
                 assert(false);
         }
-        return nullptr;
     }
 };
 
-void test_solve(const expr_ptr& lhs, const expr_ptr& rhs, const std::string& v, double value) {
-    solver solv{v};
-    auto s = solv.solve(*lhs, *rhs);
+void test_solve(const expr_ptr& lhs, const expr_ptr& rhs, const std::string& v, const expr_ptr& expected) {
+    auto s = solver::solve_for(v, *lhs, *rhs);
     if (!s) {
         std::cout << "Unable to solve '" << lhs << "'='" << rhs << "' for '" << v << "'" << std::endl;
         assert(false);
     }
-    if (match_const(*s, value)) {
+    if (expected->equal(*s)) {
         std::cout << "OK: " << lhs << "=" << rhs << " ==> " << v << "=" << *s << std::endl;
         return;
     }
 
     std::cout << "Wrong answer for '" << lhs << "'='" << rhs << "' for '" << v << "'\n";
-    std::cout << "Expected: " << value << std::endl;
+    std::cout << "Expected: " << expected << std::endl;
     std::cout << "Got: '" << s << "'" << std::endl;
     assert(false);
 }
 
 void solve_test()
 {
-    test_solve(var("x"), constant(8), "x", 8);
-    test_solve(constant(42), var("x"), "x", 42);
-    test_solve(constant(2) * var("x"), constant(8), "x", 4);
-    test_solve(constant(3) + constant(60) / var("zz"), constant(6), "zz", 20);
-    test_solve(-(-constant(3)), var("x"), "x", 3);
-    //test_solve(var("x") * constant(4) + constant(10), var("y"), "x", 0);
-    //test_solve(var("x") * constant(4), var("y"), "x", 0);
+    test_solve(var("x"), constant(8), "x", constant(8));
+    test_solve(constant(42), var("x"), "x", constant(42));
+    test_solve(constant(2) * var("x"), constant(8), "x", constant(4));
+    test_solve(constant(3) + constant(60) / var("zz"), constant(6), "zz", constant(20));
+    test_solve(-(-constant(3)), var("x"), "x", constant(3));
+    test_solve(var("x") * constant(4), var("y"), "x", var("y") / constant(4));
+    test_solve(var("x") * constant(4) + constant(10), var("y"), "x", (var("y")-constant(10)) / constant(4));
 }
 
 // TODO:
