@@ -3,6 +3,7 @@
 #include <queue>
 #include <unordered_set>
 #include <set>
+#include <map>
 #include <functional>
 #include <assert.h>
 #include "ast.h"
@@ -584,13 +585,25 @@ class solver {
 public:
     // Solve the equation "lhs = rhs" for variable "v"
     static expr_ptr solve_for(const std::string& v, const expr& lhs, const expr& rhs) {
-        solver s{v};
+        solver s;
         s.items_.add(lhs.clone(), rhs.clone());
-        return s.do_solve_all();
+        return s.do_solve(v);
+    }
+
+    static std::map<std::string, expr_ptr> solve_all(const expr& lhs, const expr& rhs) {
+        solver s;
+        s.items_.add(lhs.clone(), rhs.clone());
+        for (const auto& v : find_vars_in_expr(lhs)) {
+            s.do_solve(v);
+        }
+        for (const auto& v : find_vars_in_expr(rhs)) {
+            s.do_solve(v);
+        }
+        return std::move(s.solutions_);
     }
 
 private:
-    explicit solver(const std::string& v) : v_(v) {}
+    explicit solver() {}
 
     struct job_compare {
         static size_t cost(const job_type& a) {
@@ -606,12 +619,13 @@ private:
         }
     };
 
-    std::string v_;
-    job_list<job_compare>  items_;
+    job_list<job_compare>           items_;
+    std::map<std::string, expr_ptr> solutions_;
 
-    expr_ptr do_solve_all() {
-        for (size_t iter=0; ;++iter)  {
-            assert(iter < 100);
+    // solve for v
+    expr_ptr do_solve(const std::string& v) {
+        expr_ptr solution{};
+        for (size_t iter=0; !solution && iter < 1000; ++iter)  {
             const auto& job = items_.next();
             if (job == empty_job) {
                 break;
@@ -620,16 +634,28 @@ private:
             const auto& lhs = *job.first;
             const auto& rhs = *job.second;
             std::cout << ">>> " << lhs << " = " << rhs << std::endl;
-            if (match_var(lhs, v_) && !expr_has_var(rhs, v_)) {
-                return rhs;
-            } else if (match_var(rhs, v_) && !expr_has_var(lhs, v_)) {
-                return lhs;
-            } else {
-                do_rewrite(lhs, rhs);
-                do_rewrite(rhs, lhs);
+
+            if (auto var = expr_cast<var_expr>(lhs)) {
+                if (!expr_has_var(rhs, var->name())) {
+                    std::cout << "> " << var->name() << " = " << rhs << std::endl;
+                    solutions_[var->name()] = rhs.clone();
+                    if (var->name() == v) solution = rhs.clone();
+                }
             }
+            if (auto var = expr_cast<var_expr>(rhs)) {
+                if (!expr_has_var(lhs, var->name())) {
+                    std::cout << "> " << var->name() << " = " << lhs << std::endl;
+                    solutions_[var->name()] = lhs.clone();
+                    if (var->name() == v) solution = lhs.clone();
+                }
+            }
+
+
+            do_rewrite(lhs, rhs);
+            do_rewrite(rhs, lhs);
         }
-        return nullptr;
+        assert(solution);
+        return solution;
     }
 
     void do_rewrite(const expr& lhs, const expr& rhs) {
@@ -766,6 +792,79 @@ void solve_test()
     test_solve(var("x") * constant(2), var("x") - constant(1), "x", constant(-1));
 }
 
+void print_ast(const ast::expression& expr) {
+    std::cout << expr.start_token().position() << " ==> " << expr.repr() << std::endl;
+}
+
+expr_ptr ast_to_expr(const ast::expression& e)
+{
+    if (auto l = dynamic_cast<const ast::literal_expression*>(&e)) {
+        return constant(l->value());
+    } else if (auto a = dynamic_cast<const ast::atom_expression*>(&e)) {
+        return var(a->start_token().str());
+    } else if (auto b = dynamic_cast<const ast::binary_operation*>(&e)) {
+        // lazy error checking...
+        return do_op(b->op(), ast_to_expr(b->lhs()), ast_to_expr(b->rhs()));
+    } else {
+        std::cout << "Don't know how to handle: ";
+        print_ast(e);
+        assert(false);
+    }
+    return nullptr;
+}
+
+// TODO: Use exceptions + Don't assume cout is the correct place to put output
+void do_file(const source::file& src)
+{
+    ast::parser p{src};
+    auto expr = p.parse_expression();
+
+    // drain
+    if (!p.eof()) {
+        std::cout << "Expected end of line. Still on line:\n";
+        while (!p.eof()) {
+            auto expr = p.parse_expression();
+            print_ast(*expr);
+        }
+        return;
+    }
+
+    auto top_expr = dynamic_cast<const ast::binary_operation*>(&*expr);
+    if (!top_expr || top_expr->op() != '=') {
+        std::cout << "Expected '=' expression at top level\nGot:\n";
+        print_ast(*expr);
+        return;
+    }
+
+    auto lhs = ast_to_expr(top_expr->lhs());
+    if (!lhs) {
+        return;
+    }
+    auto rhs = ast_to_expr(top_expr->rhs());
+    if (!rhs) {
+        return;
+    }
+
+    for (const auto& mappings : solver::solve_all(*lhs, *rhs)) {
+        std::cout << mappings.first << " = " << mappings.second << std::endl;
+    }
+}
+
+void repl()
+{
+    unsigned linecount = 1;
+    for (std::string line; std::getline(std::cin, line); ++linecount) {
+        source::file src{"<stdin:"+std::to_string(linecount)+">", line};
+        do_file(src);
+    }
+}
+
+void repl_test(const std::string& expr)
+{
+    source::file src{expr, expr};
+    do_file(src);
+}
+
 // TODO:
 // - Isolate each atom in turn, when find(lhs, *match_atom(rhs, the_atom)) returns false we're done
 // - Take better advantage of symmetry (i.e. L=R and R=L are equivalent)
@@ -778,4 +877,8 @@ int main()
     ast_test();
     simplify_test();
     solve_test();
+    // TODO: Unary minus...
+    repl_test("X*42+300=0-200");
+    repl_test("Y+Z=500");
+    repl();
 }
