@@ -77,7 +77,7 @@ std::ostream& operator<<(std::ostream& os, const token& t) {
 }
 
 void tokenizer::next_token() {
-    // loop until we reach eof or get a now whitespace character
+    // loop until we reach eof or get a non whitespace character
     for (;;) {
         // handle end of text
         if (position_.index() >= source_.length()) {
@@ -102,6 +102,8 @@ void tokenizer::next_token() {
             position_ = position_.advanced_ws(*text);
             continue;
         }
+
+        // Handle operators
         for (const auto& op : "*+-/=") {
             if (*text == op) {
                 current_ = token{static_cast<token_type>(*text), position_, 1};

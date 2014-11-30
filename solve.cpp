@@ -6,14 +6,6 @@
 #include <assert.h>
 #include "ast.h"
 
-void test()
-{
-    extern void lex_test();
-    extern void ast_test();
-    lex_test();
-    ast_test();
-}
-
 size_t hash_combine(size_t a, size_t b) {
     // blah, blah, terrible, etc. etc.
     return a ^ b;
@@ -56,7 +48,7 @@ public:
     virtual std::unique_ptr<expr> clone() const override { return std::unique_ptr<expr>{new const_expr{value_}}; }
     double value() const { return value_; }
     virtual size_t hash() const override { return std::hash<double>()(value_); }
-    virtual bool equal(const expr& e) const { auto ep = expr_cast<const_expr>(e); return ep && ep->value() == value(); }
+    virtual bool equal(const expr& e) const override { auto ep = expr_cast<const_expr>(e); return ep && ep->value() == value(); }
 private:
     double value_;
     virtual void print(std::ostream& os) const override {
@@ -70,11 +62,36 @@ public:
     std::string name() const { return name_; }
     virtual std::unique_ptr<expr> clone() const override { return std::unique_ptr<expr>{new var_expr{name_}}; }
     virtual size_t hash() const override { return std::hash<std::string>()(name_); }
-    virtual bool equal(const expr& e) const { auto ep = expr_cast<var_expr>(e); return ep && ep->name() == name(); }
+    virtual bool equal(const expr& e) const override { auto ep = expr_cast<var_expr>(e); return ep && ep->name() == name(); }
 private:
     std::string name_;
     virtual void print(std::ostream& os) const override {
         os << name_;
+    }
+};
+
+class negation_expr : public expr {
+public:
+    explicit negation_expr(expr_ptr e) : e_(std::move(e)) {
+    }
+    const expr& e() const { return *e_; }
+    virtual std::unique_ptr<expr> clone() const override {
+        return std::unique_ptr<expr>{new negation_expr{e().clone()}};
+    }
+    virtual size_t hash() const override {
+        return hash_combine('-', e().hash());
+    }
+    virtual bool equal(const expr& other) const override {
+        auto ep = expr_cast<negation_expr>(other);
+        if (!ep) return false;
+        return e().equal(ep->e());
+    //    if (!ep->e().equal(e())) return false;
+        return true;
+    }
+private:
+    expr_ptr e_;
+    virtual void print(std::ostream& os) const override {
+        os << "-(" << e() << ")";
     }
 };
 
@@ -90,7 +107,7 @@ public:
     virtual size_t hash() const override {
         return hash_combine(hash_combine(op(), lhs().hash()), rhs().hash());
     }
-    virtual bool equal(const expr& e) const {
+    virtual bool equal(const expr& e) const override {
         auto ep = expr_cast<bin_op_expr>(e);
         if (!ep) return false;
         if (ep->op() != op()) return false;
@@ -103,12 +120,16 @@ private:
     expr_ptr rhs_;
     char op_;
     virtual void print(std::ostream& os) const override {
-        os << "{" << op_ << " " << lhs() << " " << rhs() << "}";
+        os << "(" << lhs() << " " << op() << " " << rhs() << ")";
     }
 };
 
 expr_ptr constant(double d) { return expr_ptr{new const_expr{d}}; }
 expr_ptr var(const std::string& n) { return expr_ptr{new var_expr{n}}; }
+
+expr_ptr operator-(expr_ptr e) {
+    return expr_ptr{new negation_expr{std::move(e)}};
+}
 
 expr_ptr operator+(expr_ptr a, expr_ptr b) {
     return expr_ptr{new bin_op_expr{std::move(a), std::move(b), '+'}};
@@ -150,95 +171,135 @@ bool match_var(const expr& e, const std::string& v) {
     return vp && vp->name() == v;
 }
 
-struct solver {
+expr_ptr simplify(expr_ptr e) {
+    double ac, bc;
+    auto bp = expr_cast<bin_op_expr>(*e);
+    if (bp) {
+        if (extract_const(bp->lhs(), ac) && extract_const(bp->rhs(), bc)) {
+            switch (bp->op()) {
+                case '+': return constant(ac + bc);
+                case '-': return constant(ac - bc);
+                case '*': return constant(ac * bc);
+                case '/': return constant(ac / bc);
+                default:
+                          std::cout << "Don't know how to handle " << *bp << std::endl;
+                          assert(false);
+            }
+        }
+        if (match_const(bp->lhs(), 0)) {
+            switch (bp->op()) {
+                case '+': return bp->rhs();
+                          //case '-': return constant(ac - bc);
+                          //case '*': return constant(ac * bc);
+                          //case '/': return constant(ac / bc);
+                default:
+                          std::cout << "Don't know how to handle " << *bp << std::endl;
+                          assert(false);
+            }
+        }
+        if (match_const(bp->rhs(), 0)) {
+            assert(false);
+        }
+    }
+    return e;
+}
+
+typedef std::pair<expr_ptr, expr_ptr> job_type;
+const job_type empty_job{nullptr, nullptr};
+
+// std::hash<> specialization for job_type
+namespace std {
+template<>
+struct hash<job_type> {
+    size_t operator()(const job_type& i) const {
+        return hash_combine(i.first->hash(), i.second->hash());
+    }
+};
+} // namespace std
+
+bool operator==(const job_type& a, const job_type& b) {
+    return a.first->equal(*b.first) && a.second->equal(*b.second);
+}
+
+std::ostream& operator<<(std::ostream& os, const job_type& j) {
+    return os << "{job " << *j.first << " " << *j.second << "}";
+}
+
+class job_list {
+public:
+    explicit job_list() {}
+
+    void add(expr_ptr lhs, expr_ptr rhs) {
+        assert(lhs && rhs);
+        auto job = make_pair(simplify(std::move(lhs)), simplify(std::move(rhs)));
+        if (old_items_.find(job) != old_items_.end()) {
+            //std::cout << "skipping " << job << std::endl;
+            return;
+        }
+        std::cout << "> new job " << job << std::endl;
+        auto res = old_items_.emplace(std::move(job));
+        assert(res.second && "item already found in old_items_");
+        items_.push(&*res.first);
+    }
+
+    const job_type& next() {
+        if (items_.empty()) {
+            return empty_job;
+        }
+        const auto& job = *items_.front();
+        items_.pop();
+        return job;
+    }
+
+private:
+    std::queue<const job_type*> items_;
+    std::unordered_set<job_type> old_items_;
+};
+
+
+// Solve the equation "e" for variable "v"
+class solver {
+public:
     explicit solver(const std::string& v) : v_(v) {}
 
     expr_ptr solve(const expr& lhs, const expr& rhs) {
-        items_ = std::queue<item_type>{};
-        push_job(lhs.clone() - rhs.clone(), constant(0));
-        return do_solve_1();
+        items_ = job_list{};
+        items_.add(lhs.clone(), rhs.clone());
+        return do_solve_all();
     }
 
-    // Solve the equation "e" for variable "v"
 private:
-    typedef std::pair<expr_ptr, expr_ptr> item_type;
-    struct item_hash {
-        size_t operator()(const item_type& i) const {
-            return hash_combine(i.first->hash(), i.second->hash());
-        }
-    };
-    struct item_pred {
-        bool operator()(const item_type& a, const item_type& b) const {
-            return a.first->equal(*b.first) && a.second->equal(*b.second);
-        }
-    };
-
     std::string v_;
-    std::queue<item_type> items_;
-    std::unordered_set<item_type, item_hash, item_pred> old_items_;
+    job_list    items_;
 
-    expr_ptr simplify(expr_ptr e) {
-        double ac, bc;
-        auto bp = expr_cast<bin_op_expr>(*e);
-        if (bp) {
-            if (extract_const(bp->lhs(), ac) && extract_const(bp->rhs(), bc)) {
-                switch (bp->op()) {
-                    case '+': return constant(ac + bc);
-                    case '-': return constant(ac - bc);
-                    case '*': return constant(ac * bc);
-                    case '/': return constant(ac / bc);
-                    default:
-                              std::cout << "Don't know how to handle " << *bp << std::endl;
-                              assert(false);
-                }
+    expr_ptr do_solve_all() {
+        for (;;) {
+            const auto& job = items_.next();
+            if (job == empty_job) {
+                break;
             }
-            if (match_const(bp->lhs(), 0)) {
-                switch (bp->op()) {
-                    case '+': return bp->rhs();
-                    //case '-': return constant(ac - bc);
-                    //case '*': return constant(ac * bc);
-                    //case '/': return constant(ac / bc);
-                    default:
-                              std::cout << "Don't know how to handle " << *bp << std::endl;
-                              assert(false);
-                }
-            }
-            if (match_const(bp->rhs(), 0)) {
-                assert(false);
-            }
-        }
-        return e;
-    }
-
-    void push_job(expr_ptr lhs, expr_ptr rhs) {
-        auto job = make_pair(simplify(std::move(lhs)), simplify(std::move(rhs)));
-        if (old_items_.find(job) != old_items_.end()) {
-            std::cout << "skipping " << *job.first << "=" << *job.second << std::endl;
-            return;
-        }
-        items_.push(std::move(job));
-    }
-
-    expr_ptr do_solve_1() {
-        while (!items_.empty()) {
-            auto& top = items_.front();
-            old_items_.emplace(top.first->clone(), top.second->clone());
-            if (auto e = do_solve(*top.first, *top.second)) {
+            assert(job.first && job.second);
+            if (auto e = do_solve(*job.first, *job.second)) {
                 return e;
             }
-            items_.pop();
         }
         return nullptr;
     }
 
     expr_ptr do_solve(const expr& lhs, const expr& rhs) {
         double val;
-        std::cout << ">>>solve lhs=" << lhs << " rhs=" << rhs << std::endl;
+        std::cout << ">>> solve lhs=" << lhs << " rhs=" << rhs << std::endl;
         if (match_var(lhs, v_) && extract_const(rhs, val)) {
             return constant(val);
         }
         if (match_var(rhs, v_) && extract_const(lhs, val)) {
             return constant(val);
+        }
+        if (auto np = expr_cast<negation_expr>(lhs)) {
+            return do_solve_neg(*np, rhs);
+        }
+        if (auto np = expr_cast<negation_expr>(rhs)) {
+            return do_solve_neg(*np, lhs);
         }
         if (auto bp = expr_cast<bin_op_expr>(lhs)) {
             return do_solve_bin_op(*bp, rhs);
@@ -250,23 +311,37 @@ private:
         return nullptr;
     }
 
+    // Rewrite {-n.e, r} to {n.e, -r}
+    expr_ptr do_solve_neg(const negation_expr& n, const expr& r) {
+        items_.add(n.e(), -r);
+        return nullptr;
+    }
+
+    // Rewrite {a.lhs OP a.rhs, b} using our knowledge of "OP"
     expr_ptr do_solve_bin_op(const bin_op_expr& a, const expr& b) {
-       switch (a.op()) {
+        auto& l = a.lhs();
+        auto& r = a.rhs();
+        std::cout << "> solve bin op " << l << " " << a.op() << " " << r << " = " << b << std::endl;
+        switch (a.op()) {
             case '+':
-                push_job(a.lhs(), b - a.rhs());
-                push_job(a.rhs(), b - a.lhs());
+                // { L + R, B } -> { L, B - R } and { R, B - L }
+                items_.add(l, b - r);
+                items_.add(r, b - l);
                 break;
             case '-':
-                push_job(a.lhs(), b + a.rhs());
-                push_job(a.rhs(), b + a.lhs());
+                // { L - R, B } -> { L, B + R } and {  -R, B - L }
+                items_.add(l, b + r);
+                items_.add(-r, b - l);
                 break;
-             case '*':
-                push_job(a.lhs(), b / a.rhs());
-                push_job(a.rhs(), b / a.lhs());
+            case '*':
+                // { L * R, B } -> { L, B / R } and { R, B / L }
+                items_.add(l, b / r);
+                items_.add(r, b / l);
                 break;
             case '/':
-                push_job(a.lhs(), b * a.rhs());
-                push_job(a.rhs(), b * a.lhs());
+                // { L / R, B } -> { L, B * R } and { 1 / R, B / L }
+                items_.add(l, b * r);
+                items_.add(constant(1) / r, b / l);
                 break;
             default:
                 std::cout << "Don't know how to handle " << a.op() << std::endl;
@@ -294,19 +369,22 @@ void test_solve(const expr_ptr& lhs, const expr_ptr& rhs, const std::string& v, 
     assert(false);
 }
 
-
+// TODO:
+// - Prioritize jobs by "badness"[not good] ("clean" rhs good? less tree depth good?)
+// - Isolate each atom in turn, when find(lhs, *match_atom(rhs, the_atom)) returns false we're done
+// - Take advantage of symmetry (i.e. L=R and R=L are equivalent)
+// - Make simplification rules table based or allow them to be specified in a DSL
+//
 int main()
 {
-    test();
-
+    extern void lex_test();
+    extern void ast_test();
+    lex_test();
+    ast_test();
     test_solve(var("x"), constant(8), "x", 8);
     test_solve(constant(42), var("x"), "x", 42);
     test_solve(constant(2) * var("x"), constant(8), "x", 4);
-    // TODO:
-    // - Prioritize jobs by "badness"[not good] ("clean" rhs good? less tree depth good?)
-    // - Avoid doing the same work again in push_job (hash_map of finished jobs)
-    // - Isolate each atom in turn, when find(lhs, *match_atom(rhs, the_atom)) returns false we're done
-    //
+    test_solve(constant(3) + constant(60) / var("zz"), constant(6), "zz", 20);
     //test_solve(var("x") * constant(4) + constant(10), var("y"), "x", 0);
     //test_solve(var("x") * constant(4), var("y"), "x", 0);
 }
