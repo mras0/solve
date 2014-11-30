@@ -18,7 +18,7 @@ ifdef OPTIMIZED
 	CXXFLAGS+=-O3 -DNDEBUG
 endif
 
-ifndef NO_SANITIZE
+ifdef SANITIZE
 	CXXFLAGS+=-fPIC -fsanitize=address
 endif
 

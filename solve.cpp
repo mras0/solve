@@ -486,6 +486,7 @@ std::ostream& operator<<(std::ostream& os, const job_type& j) {
     return os << "{job " << *j.first << " " << *j.second << "}";
 }
 
+template<typename Compare>
 class job_list {
 public:
     explicit job_list() {}
@@ -515,13 +516,13 @@ public:
         if (items_.empty()) {
             return empty_job;
         }
-        const auto& job = *items_.front();
+        const auto& job = *items_.top();
         items_.pop();
         return job;
     }
 
 private:
-    std::queue<const job_type*> items_;
+    std::priority_queue<const job_type*, std::vector<const job_type*>, Compare> items_;
     std::unordered_set<job_type> old_items_;
 };
 
@@ -529,6 +530,21 @@ private:
 ////////////////////////////
 // SOLVER
 ////////////////////////////
+
+unsigned depth(const expr& e) {
+    auto calc_depth = 
+        or_m(neg_m([&](const expr& ne) { return 1+depth(ne); }),
+            bin_op_m([&](char, const expr& lhs, const expr& rhs) { return 1+std::max(depth(lhs), depth(rhs)); }),
+            const_m([&](double) { return 1; }),
+            var_m([&](const std::string&) { return 1; }),
+            [&](const expr& e) {
+                std::cout << e << std::endl;
+                assert(false);
+                return 1;
+            });
+
+    return calc_depth(e);
+}
 
 void do_find_vars_in_expr(const expr& e, std::set<std::string>& vars) {
     auto lm = 
@@ -576,8 +592,22 @@ public:
 private:
     explicit solver(const std::string& v) : v_(v) {}
 
+    struct job_compare {
+        static size_t cost(const job_type& a) {
+            const auto& l = *a.first;
+            const auto& r = *a.second;
+            const size_t depth_cost = depth(l) + depth(r);
+            const size_t var_cost = find_vars_in_expr(l).size() + find_vars_in_expr(r).size();
+            return depth_cost + var_cost * 100;
+        }
+
+        bool operator()(const job_type* a, const job_type* b) const {
+            return cost(*a) > cost(*b);
+        }
+    };
+
     std::string v_;
-    job_list    items_;
+    job_list<job_compare>  items_;
 
     expr_ptr do_solve_all() {
         for (size_t iter=0; ;++iter)  {
@@ -589,7 +619,7 @@ private:
             assert(job.first && job.second);
             const auto& lhs = *job.first;
             const auto& rhs = *job.second;
-            std::cout << ">>> solve lhs=" << lhs << " rhs=" << rhs << std::endl;
+            std::cout << ">>> " << lhs << " = " << rhs << std::endl;
             if (match_var(lhs, v_) && !expr_has_var(rhs, v_)) {
                 return rhs;
             } else if (match_var(rhs, v_) && !expr_has_var(lhs, v_)) {
@@ -617,17 +647,17 @@ private:
     }
 
     void do_rewrite_bin_op(char op, const expr& l, const expr& r, const expr& b) {
-        std::cout << "do_rewrite_bin_op " << l << " " << op << " " << r << " = " << b << std::endl;
+        //std::cout << "do_rewrite_bin_op " << l << " " << op << " " << r << " = " << b << std::endl;
         auto m = or_m(
                 bin_op_m([&](char l_op, const expr& l_lhs, const expr& l_rhs) {
                     // (l_lhs l_op l_rhs) op r = b
                     if (op == '*' || op == '/') { // distribute
                         auto x = do_op(op, l_lhs, r);
                         auto y = do_op(op, l_rhs, r);
-                        std::cout << "distributed: " << *x << l_op << *y << "=" << b << std::endl;
+                        //std::cout << "distributed: " << *x << l_op << *y << "=" << b << std::endl;
                         items_.add(do_op(l_op, std::move(x), std::move(y)), b);
                     } else if ((op == '+' || op == '-') && (l_op == '+' || l_op == '-')) { // commute
-                        std::cout << "commuting\n";
+                        //std::cout << "commuting\n";
                         items_.add(do_op(l_op, l_lhs, do_op(op, l_rhs, r)), r);
                     }
                     return true;
@@ -700,6 +730,18 @@ void test_solve(const expr_ptr& lhs, const expr_ptr& rhs, const std::string& v, 
     std::cout << "Got: '" << s << "'" << std::endl;
     assert(false);
 }
+
+void test_depth(const expr_ptr& e, unsigned expected_depth)
+{
+    auto d = depth(*e);
+    if (d != expected_depth) {
+        std::cout << "Wrong depth for " << e << "\n";
+        std::cout << "Expected: " << expected_depth << std::endl;
+        std::cout << "Got: " << d << std::endl;
+        assert(false);
+    }
+}
+
 void solve_test()
 {
     test_find_vars_in_expr(constant(0), {});
@@ -708,6 +750,11 @@ void solve_test()
     test_find_vars_in_expr(var("x")+var("x"), {"x"});
     test_find_vars_in_expr(var("x")+var("y"), {"x","y"});
 
+    test_depth(constant(0), 1);
+    test_depth(-var("zz"), 2);
+    test_depth(constant(0)+constant(1), 2);
+    test_depth(constant(0)+constant(1)*constant(2), 3);
+
     test_solve(var("x"), constant(8), "x", constant(8));
     test_solve(constant(42), var("x"), "x", constant(42));
     test_solve(constant(2) * var("x"), constant(8), "x", constant(4));
@@ -715,23 +762,20 @@ void solve_test()
     test_solve(-(-constant(3)), var("x"), "x", constant(3));
     test_solve(var("x") * constant(4), var("y"), "x", var("y") / constant(4));
     test_solve(var("x") * constant(4) + constant(10), var("y"), "x", (var("y")-constant(10)) / constant(4));
+
+    test_solve(var("x") * constant(2), var("x") - constant(1), "x", constant(-1));
 }
 
 // TODO:
-// - Prioritize jobs by "badness"[not good] ("clean" rhs good? less tree depth good?)
 // - Isolate each atom in turn, when find(lhs, *match_atom(rhs, the_atom)) returns false we're done
-// - Take advantage of symmetry (i.e. L=R and R=L are equivalent)
-// - Improve the tree matching and simplification function(s)
-//
+// - Take better advantage of symmetry (i.e. L=R and R=L are equivalent)
+// - Improve (clean up) the tree matching and simplification function(s)
 int main()
 {
-//    test_solve(var("x") * constant(2), var("x") - constant(1), "x", constant(-1));
     extern void lex_test();
     extern void ast_test();
     lex_test();
     ast_test();
     simplify_test();
     solve_test();
-    // Goal: test_solve(var("x") * constant(2), var("x") - constant(1), "x", constant(-1));
-    // Subgoal (but shouldn't be done in simplify..): test_simplify(var("x") - (var("x") * constant(2)), var("x"));
 }
