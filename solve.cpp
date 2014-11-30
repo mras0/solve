@@ -179,6 +179,24 @@ bool match_var(const expr& e, const std::string& v) {
 #include <tuple>
 #include <type_traits>
 
+template<typename T>
+struct binder {
+    binder(T& x) : x_(&x), bound_(false) {
+    }
+    bool operator()(const T& x) {
+        assert(!bound_);
+        *x_ = x;
+        bound_ = true;
+        return true;
+    }
+    bool bound() const { return bound_; }
+private:
+    T*   x_;
+    bool bound_;
+};
+template<typename T>
+binder<T> binder_m(T& x) { return binder<T>(x); }
+
 template<typename A>
 struct const_matcher {
 public:
@@ -193,6 +211,8 @@ public:
 private:
     A a_;
 };
+template<typename A>
+const_matcher<A> const_m(const A& a) { return const_matcher<A>(a); }
 
 template<typename A>
 struct neg_matcher {
@@ -207,6 +227,8 @@ struct neg_matcher {
 private:
     A a_;
 };
+template<typename A>
+neg_matcher<A> neg_m(const A& a) { return neg_matcher<A>(a); }
 
 template<typename A>
 struct var_matcher {
@@ -221,21 +243,24 @@ struct var_matcher {
 private:
     A a_;
 };
-
+template<typename A>
+var_matcher<A> var_m(const A& a) { return var_matcher<A>(a); }
 
 template<typename A>
 struct bin_op_matcher {
-    typedef typename std::result_of<A(const bin_op_expr&)>::type result_type;
+    typedef typename std::result_of<A(char, const expr&, const expr&)>::type result_type;
     bin_op_matcher(const A& a) : a_(a) {}
     result_type operator()(const expr& e) {
         if (auto be = expr_cast<bin_op_expr>(e)) {
-            return a_(*be);
+            return a_(be->op(), be->lhs(), be->rhs());
         }
         return result_type{};
     }
 private:
     A a_;
 };
+template<typename A>
+bin_op_matcher<A> bin_op_m(const A& a) { return bin_op_matcher<A>(a); }
 
 template<typename A, typename... As>
 struct or_matcher {
@@ -267,38 +292,6 @@ private:
         return result_type{};
     }
 };
-
-template<typename T>
-struct binder {
-    binder(T& x) : x_(&x), bound_(false) {
-    }
-    bool operator()(const T& x) {
-        assert(!bound_);
-        *x_ = x;
-        bound_ = true;
-        return true;
-    }
-    bool bound() const { return bound_; }
-private:
-    T*   x_;
-    bool bound_;
-};
-
-template<typename T>
-binder<T> binder_m(T& x) { return binder<T>(x); }
-
-template<typename A>
-const_matcher<A> const_m(const A& a) { return const_matcher<A>(a); }
-
-template<typename A>
-var_matcher<A> var_m(const A& a) { return var_matcher<A>(a); }
-
-template<typename A>
-neg_matcher<A> neg_m(const A& a) { return neg_matcher<A>(a); }
-
-template<typename A>
-bin_op_matcher<A> bin_op_m(const A& a) { return bin_op_matcher<A>(a); }
-
 template<typename A, typename... As>
 or_matcher<A, As...> or_m(const A& a, const As&... as) {
     return or_matcher<A, As...>(a, as...);
@@ -360,20 +353,19 @@ expr_ptr simplify_bin_expr_const(char op, const expr& e, double r) {
     return nullptr;
 }
 
-expr_ptr simplify_bin_op(const bin_op_expr& e) {
-    auto lhs = simplify(e.lhs());
-    auto rhs = simplify(e.rhs());
-    double l, r;
-    if (const_m(binder_m(l))(*lhs)) {
-        if (const_m(binder_m(r))(*rhs)) {
-            return simplify_bin_const_const(e.op(), l, r);
-        }
-        return simplify_bin_const_expr(e.op(), l, *rhs);
-    }
-    if (const_m(binder_m(r))(*rhs)) {
-        return simplify_bin_expr_const(e.op(), *lhs, r);
-    }
-    return expr_ptr{};
+expr_ptr simplify_bin_op(char op, const expr& lhs_e, const expr& rhs_e) {
+    auto lhs = simplify(lhs_e);
+    auto rhs = simplify(rhs_e);
+    auto m = or_m(const_m([&](double l) {
+            auto m2 = or_m(const_m([&](double r) { return simplify_bin_const_const(op, l, r); }),
+                           [&](const expr& e) { return simplify_bin_const_expr(op, l, e); });
+            return m2(*rhs);
+            }),
+            [&](const expr& e) {
+            auto m2 = const_m([&](double r) { return simplify_bin_expr_const(op, e, r); });
+            return m2(*rhs);
+            });
+    return m(*lhs);
 }
 
 expr_ptr simplify(const expr& e) {
@@ -505,9 +497,9 @@ void do_find_vars_in_expr(const expr& e, std::set<std::string>& vars) {
         or_m(neg_m([&](const expr& ne) {
                     do_find_vars_in_expr(ne, vars);
                     return true; }),
-                bin_op_m([&](const bin_op_expr& be) {
-                    do_find_vars_in_expr(be.lhs(), vars);
-                    do_find_vars_in_expr(be.rhs(), vars);
+                bin_op_m([&](char, const expr& lhs, const expr& rhs) {
+                    do_find_vars_in_expr(lhs, vars);
+                    do_find_vars_in_expr(rhs, vars);
                     return true; }),
                 const_m([&](double) {
                     return true;
@@ -574,7 +566,7 @@ private:
     void do_solve_lhs(const expr& lhs, const expr& rhs) {
         auto lm = 
             or_m(neg_m([&](const expr& ne) { items_.add(ne, -rhs); return true; }),
-                bin_op_m([&](const bin_op_expr& be) { do_solve_bin_op(be, rhs); return true; }),
+                bin_op_m([&](char op, const expr& l_lhs, const expr& l_rhs) { do_solve_bin_op(op, l_lhs, l_rhs, rhs); return true; }),
                 const_m([&](double) { items_.add(constant(0), rhs - lhs); return true; }),
                 var_m([&](const std::string&) { items_.add(constant(0), rhs - lhs); return true; })
                 );
@@ -585,11 +577,9 @@ private:
         }
     }
 
-    // Rewrite {a.lhs OP a.rhs, b} using our knowledge of "OP"
-    void do_solve_bin_op(const bin_op_expr& a, const expr& b) {
-        auto& l = a.lhs();
-        auto& r = a.rhs();
-        switch (a.op()) {
+    // Rewrite {lhs OP rhs, b} using our knowledge of "OP"
+    void do_solve_bin_op(char op, const expr& l, const expr& r, const expr& b) {
+        switch (op) {
             case '+':
                 // { L + R, B } -> { L, B - R } and { R, B - L }
                 items_.add(l, b - r);
@@ -611,7 +601,7 @@ private:
                 items_.add(constant(1) / r, b / l);
                 break;
             default:
-                std::cout << "Don't know how to handle " << a.op() << std::endl;
+                std::cout << "Don't know how to handle " << op << std::endl;
                 assert(false);
         }
     }
