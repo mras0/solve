@@ -172,9 +172,18 @@ bool match_var(const expr& e, const std::string& v) {
 }
 
 expr_ptr simplify(expr_ptr e) {
-    double ac, bc;
-    auto bp = expr_cast<bin_op_expr>(*e);
-    if (bp) {
+    if (auto np = expr_cast<negation_expr>(*e)) {
+        const auto& negated_e = np->e();
+        double c;
+        if (auto nnp = expr_cast<negation_expr>(negated_e)) { // -(-(e))
+            return nnp->e();
+        } else if (extract_const(negated_e, c)) { // -constant
+            return constant(-c);
+        }
+        // No simplifaction can be done
+        return e;
+    } else if (auto bp = expr_cast<bin_op_expr>(*e)) {
+        double ac, bc;
         if (extract_const(bp->lhs(), ac) && extract_const(bp->rhs(), bc)) {
             switch (bp->op()) {
                 case '+': return constant(ac + bc);
@@ -385,6 +394,7 @@ int main()
     test_solve(constant(42), var("x"), "x", 42);
     test_solve(constant(2) * var("x"), constant(8), "x", 4);
     test_solve(constant(3) + constant(60) / var("zz"), constant(6), "zz", 20);
+    test_solve(-(-constant(3)), var("x"), "x", 3);
     //test_solve(var("x") * constant(4) + constant(10), var("y"), "x", 0);
     //test_solve(var("x") * constant(4), var("y"), "x", 0);
 }
